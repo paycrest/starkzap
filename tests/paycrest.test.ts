@@ -13,6 +13,7 @@ import {
   PaycrestApi,
   PaycrestOfframpExecuteError,
   PaycrestOrderError,
+  STARKNET_MAINNET_CHAIN_ID,
   paycrestGatewayFor,
   paycrestGatewaySessionPolicies,
   paycrestNetworkFor,
@@ -164,6 +165,48 @@ describe("PaycrestApi", () => {
     await expect(api.getProviderOrderStatus(1n, "   ")).rejects.toThrow(
       /gatewayId is required/i
     );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsafe-integer chainId in getProviderOrderStatus (would silently round)", async () => {
+    const fetchMock = vi.fn();
+    const api = new PaycrestApi({
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    // Number.MAX_SAFE_INTEGER + 1 — any number above 2^53-1 silently
+    // rounds when stringified, so the SDK would request the wrong
+    // order id. Reject up front.
+    const unsafe = Number.MAX_SAFE_INTEGER + 1;
+    await expect(api.getProviderOrderStatus(unsafe, "0xabc")).rejects.toThrow(
+      /safe integer/i
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects empty/whitespace string chainId in getProviderOrderStatus", async () => {
+    const fetchMock = vi.fn();
+    const api = new PaycrestApi({
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    await expect(api.getProviderOrderStatus("", "0xabc")).rejects.toThrow(
+      /chainId is required/i
+    );
+    await expect(api.getProviderOrderStatus("   ", "0xabc")).rejects.toThrow(
+      /chainId is required/i
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects whitespace-only API keys on order-creating calls", async () => {
+    const fetchMock = vi.fn();
+    const api = new PaycrestApi({
+      apiKey: "   ",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    // Whitespace-only keys must be treated as missing so the failure
+    // is a deterministic argument error rather than a remote 401.
+    await expect(api.createOrder({})).rejects.toThrow(/API key/i);
+    await expect(api.getOrder("ord-1")).rejects.toThrow(/API key/i);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -670,7 +713,9 @@ describe("Paycrest.waitForGatewayOrder", () => {
       pollIntervalMs: 1,
     });
     const [url] = fetchMock.mock.calls[0]!;
-    expect(String(url)).toContain("/v2/orders/23448594291968334/0xabc");
+    expect(String(url)).toContain(
+      `/v2/orders/${STARKNET_MAINNET_CHAIN_ID.toString()}/0xabc`
+    );
     expect(result.status).toBe("settled");
   });
 
@@ -782,7 +827,7 @@ describe("OfframpResult.wait() dispatch", () => {
             },
           })
         );
-      if (u.includes("/v2/orders/23448594291968334/")) {
+      if (u.includes(`/v2/orders/${STARKNET_MAINNET_CHAIN_ID.toString()}/`)) {
         return jsonResponse(
           200,
           envelope({ orderId: orderIdHex, status: "validated" })
@@ -828,7 +873,9 @@ describe("OfframpResult.wait() dispatch", () => {
     expect(status.status).toBe("validated");
     // Confirms the lookup hit the gateway-id endpoint, not /v2/sender/orders.
     const lookupCalls = fetchMock.mock.calls.filter((c) =>
-      String(c[0]).includes("/v2/orders/23448594291968334/")
+      String(c[0]).includes(
+        `/v2/orders/${STARKNET_MAINNET_CHAIN_ID.toString()}/`
+      )
     );
     expect(lookupCalls.length).toBeGreaterThan(0);
     const senderCalls = fetchMock.mock.calls.filter((c) =>

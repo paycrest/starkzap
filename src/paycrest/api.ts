@@ -164,6 +164,19 @@ export class PaycrestApi {
     gatewayId: string,
     options?: { signal?: AbortSignal }
   ): Promise<PaycrestProviderOrderStatus> {
+    // The aggregator's int64 chainId for Starknet (23448594291968334)
+    // exceeds Number.MAX_SAFE_INTEGER, so a `number` callers may pass
+    // would silently round. Reject unsafe numeric inputs up front so
+    // mistakes surface as a clear argument error instead of a request
+    // for the wrong order id.
+    if (typeof chainId === "number" && !Number.isSafeInteger(chainId)) {
+      throw new Error(
+        "Paycrest.getProviderOrderStatus: chainId must be a safe integer, bigint, or decimal string (received unsafe number)."
+      );
+    }
+    if (typeof chainId === "string" && chainId.trim() === "") {
+      throw new Error("Paycrest.getProviderOrderStatus: chainId is required");
+    }
     if (!gatewayId || gatewayId.trim() === "") {
       throw new Error("Paycrest.getProviderOrderStatus: gatewayId is required");
     }
@@ -175,7 +188,7 @@ export class PaycrestApi {
   }
 
   private requireApiKey(method: string): void {
-    if (!this.apiKey) {
+    if (!this.apiKey || this.apiKey.trim() === "") {
       throw new Error(
         `Paycrest.${method} requires an API key — pass apiKey to the Paycrest constructor or via SDKConfig.paycrest.apiKey.`
       );

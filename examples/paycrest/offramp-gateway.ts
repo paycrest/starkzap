@@ -72,10 +72,12 @@ async function main() {
     console.log("final status:", status.status);
   } catch (err) {
     if (err instanceof PaycrestOrderError) {
+      // Log only status + order id — `err.order` includes the
+      // recipient bank details and would leak PII.
       console.error(
         "order ended in non-success state:",
         err.order.status,
-        err.order
+        err.order.id
       );
       process.exit(2);
     }

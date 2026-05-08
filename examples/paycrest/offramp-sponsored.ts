@@ -71,9 +71,10 @@ async function main() {
 
   console.log("submitted (sponsored multicall):", tx.hash);
 
-  // Run the off-ramp directly via paycrest.offramp(...) just to access
-  // result.wait() — for the sponsored example we already submitted via
-  // the builder above, so we poll the gateway endpoint by gateway_id.
+  // The submission ran through `wallet.tx().paycrestOfframp(...).send(...)`
+  // above (so we never get an `OfframpResult` with a built-in `wait()`).
+  // Poll the gateway endpoint manually using the on-chain gateway_id
+  // we extract from the receipt.
   const paycrest = wallet.paycrest();
   await tx.wait();
   console.log("on-chain confirmed. Polling for fiat settlement...");
@@ -100,7 +101,9 @@ async function main() {
     console.log("final status:", status.status);
   } catch (err) {
     if (err instanceof PaycrestOrderError) {
-      console.error("order ended in:", err.order.status, err.order);
+      // Log only status + order id — `err.order` includes the
+      // recipient bank details and would leak PII.
+      console.error("order ended in:", err.order.status, err.order.id);
       process.exit(2);
     }
     throw err;
