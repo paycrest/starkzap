@@ -95,6 +95,15 @@ describe("Paycrest rate scaling (u128, 2 decimals)", () => {
     // Strips any leading non-digit (e.g. accidental "$1500")
     expect(rateToU128("$1500")).toBe(150000n);
   });
+
+  it("throws on more than 2 decimal places (no silent truncation)", async () => {
+    // Silently slicing would let callers submit a different rate
+    // on-chain than the one they fetched/displayed. Throw instead
+    // so the caller rounds explicitly upstream.
+    const { rateToU128 } = await import("@/paycrest/paycrest");
+    expect(() => rateToU128("1361.999")).toThrow(/decimal places/i);
+    expect(() => rateToU128("1500.501")).toThrow(/decimal places/i);
+  });
 });
 
 describe("Paycrest presets", () => {
@@ -130,6 +139,17 @@ describe("PaycrestApi", () => {
       fetch: fetchMock as unknown as typeof fetch,
     });
     await expect(api.createOrder({})).rejects.toThrow(/API key/i);
+  });
+
+  it("rejects empty order ids before hitting the network (deterministic argument error)", async () => {
+    const fetchMock = vi.fn();
+    const api = new PaycrestApi({
+      apiKey: "k",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    await expect(api.getOrder("")).rejects.toThrow(/id is required/i);
+    await expect(api.getOrder("   ")).rejects.toThrow(/id is required/i);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("surfaces the server error message on 4xx responses", async () => {
@@ -407,6 +427,47 @@ describe("Paycrest on-ramp", () => {
     expect(result.providerAccount.amountToTransfer).toBe("50000");
     expect(result.providerAccount.currency).toBe("NGN");
     expect(result.reference).toBe("order-002");
+  });
+
+  it("falls back to providerAccount.validUntil when the top-level field is missing", async () => {
+    // The Sender API surfaces validUntil either at the top level or
+    // nested under providerAccount; the SDK must accept both.
+    const validUntil = "2026-05-09T10:05:00Z";
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        201,
+        envelope({
+          id: "ord-vu",
+          status: "initiated",
+          // validUntil is ONLY on providerAccount
+          providerAccount: {
+            institution: "GTB",
+            accountIdentifier: "0123456789",
+            accountName: "Provider A",
+            amountToTransfer: "50000",
+            currency: "NGN",
+            validUntil,
+          },
+        })
+      )
+    );
+    const paycrest = new Paycrest({
+      apiKey: "k",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    const result = await paycrest.onramp({
+      from: {
+        currency: "NGN",
+        amount: 50000,
+        refundAccount: {
+          institution: "GTB",
+          accountIdentifier: "1",
+          accountName: "x",
+        },
+      },
+      to: { token: USDC, recipient: SENDER },
+    });
+    expect(result.validUntil).toBe(validUntil);
   });
 
   it("accepts 40-hex-digit Starknet recipients (valid felt252 that fits in 160 bits)", async () => {

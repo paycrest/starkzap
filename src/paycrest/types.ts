@@ -158,6 +158,15 @@ export interface PaycrestProviderOrderStatus {
   amount?: string;
   amountInUSD?: string;
   token?: string;
+  /**
+   * Paycrest network identifier as returned by the API.
+   *
+   * Typed as `PaycrestNetwork | string` intentionally: Paycrest may
+   * ship new network identifiers (e.g. `"asset-chain"`) before a SDK
+   * release catches up, and this field must keep passing raw responses
+   * through. Callers can narrow against `PaycrestNetwork` themselves
+   * if they need strict handling.
+   */
   network?: PaycrestNetwork | string;
   txHash?: string;
   settlements?: unknown[];
@@ -205,7 +214,16 @@ export type PaycrestEncryptor = (
  * deployments, or non-standard runtimes.
  */
 export interface PaycrestOptions {
-  /** Paycrest API key. Required for any order-creating call. */
+  /**
+   * Paycrest API key.
+   *
+   * Optional at construction — public read endpoints
+   * (`listCurrencies`, `listInstitutions`, `listTokens`, `getRate`,
+   * `getProviderOrderStatus`) work without one. Order-creating calls
+   * (`createOrder`, `getOrder`, `listOrders`, plus `offramp` /
+   * `onramp` which call them internally) throw a clear runtime error
+   * if omitted.
+   */
   apiKey?: string;
   /** Paycrest API secret. Required only for `Paycrest.verifyWebhookSignature`. */
   apiSecret?: string;

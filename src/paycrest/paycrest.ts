@@ -636,12 +636,17 @@ export class Paycrest {
         `Paycrest onramp order ${order.id ?? "<unknown>"} returned no providerAccount`
       );
     }
+    const providerAccount = order.providerAccount as PaycrestProviderAccount;
     const result: OnrampResult = {
       orderId: order.id,
       status: order.status,
-      providerAccount: order.providerAccount as PaycrestProviderAccount,
+      providerAccount,
     };
-    if (order.validUntil !== undefined) result.validUntil = order.validUntil;
+    // The Sender API surfaces `validUntil` either at the top level of
+    // the order or nested under `providerAccount`. Fall back to the
+    // nested location so the SDK never drops a real expiry.
+    const validUntil = order.validUntil ?? providerAccount.validUntil;
+    if (validUntil !== undefined) result.validUntil = validUntil;
     if (input.reference !== undefined) result.reference = input.reference;
     return result;
   }
@@ -778,6 +783,14 @@ function inferStarknetNetwork(_recipient: Address): PaycrestNetwork {
 export function rateToU128(decimalString: string): bigint {
   // Convert "1500.50" -> 150050n given RATE_DECIMALS = 2.
   const [whole = "0", fractional = ""] = decimalString.split(".");
+  if (fractional.length > Number(RATE_DECIMALS)) {
+    // Silently truncating would let the caller submit a different
+    // rate than the one they fetched/displayed. Throw so the caller
+    // notices and rounds explicitly upstream.
+    throw new Error(
+      `Paycrest rate "${decimalString}" has more than ${RATE_DECIMALS.toString()} decimal places — round before submitting (the on-chain Gateway accepts u128 scaled to 2 decimals).`
+    );
+  }
   const padded = (fractional + "0".repeat(Number(RATE_DECIMALS))).slice(
     0,
     Number(RATE_DECIMALS)

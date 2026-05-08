@@ -113,6 +113,9 @@ export class PaycrestApi {
     id: string,
     options?: { signal?: AbortSignal }
   ): Promise<PaycrestOrder> {
+    if (!id || id.trim() === "") {
+      throw new Error("Paycrest.getOrder: id is required");
+    }
     this.requireApiKey("getOrder");
     return this.request<PaycrestOrder>(
       `/v2/sender/orders/${encodeURIComponent(id)}`,
