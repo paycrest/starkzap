@@ -1,4 +1,8 @@
-export { Paycrest, PaycrestOrderError } from "@/paycrest/paycrest";
+export {
+  Paycrest,
+  PaycrestOfframpExecuteError,
+  PaycrestOrderError,
+} from "@/paycrest/paycrest";
 export { PaycrestApi, PAYCREST_API_BASE_DEFAULT } from "@/paycrest/api";
 export {
   PaycrestGateway,

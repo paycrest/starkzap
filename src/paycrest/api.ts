@@ -97,23 +97,34 @@ export class PaycrestApi {
     return this.request<PaycrestRate>(path, { method: "GET" });
   }
 
-  async createOrder(body: unknown): Promise<PaycrestOrder> {
+  async createOrder(
+    body: unknown,
+    options?: { signal?: AbortSignal }
+  ): Promise<PaycrestOrder> {
     this.requireApiKey("createOrder");
-    return this.request<PaycrestOrder>("/v2/sender/orders", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-  }
-
-  async getOrder(id: string): Promise<PaycrestOrder> {
-    this.requireApiKey("getOrder");
     return this.request<PaycrestOrder>(
-      `/v2/sender/orders/${encodeURIComponent(id)}`,
-      { method: "GET" }
+      "/v2/sender/orders",
+      { method: "POST", body: JSON.stringify(body) },
+      options?.signal
     );
   }
 
-  async listOrders(filter?: Record<string, string | number>): Promise<{
+  async getOrder(
+    id: string,
+    options?: { signal?: AbortSignal }
+  ): Promise<PaycrestOrder> {
+    this.requireApiKey("getOrder");
+    return this.request<PaycrestOrder>(
+      `/v2/sender/orders/${encodeURIComponent(id)}`,
+      { method: "GET" },
+      options?.signal
+    );
+  }
+
+  async listOrders(
+    filter?: Record<string, string | number>,
+    options?: { signal?: AbortSignal }
+  ): Promise<{
     orders: PaycrestOrder[];
     [key: string]: unknown;
   }> {
@@ -124,7 +135,11 @@ export class PaycrestApi {
       for (const [k, v] of Object.entries(filter)) params.set(k, String(v));
       path += `?${params.toString()}`;
     }
-    return this.request<{ orders: PaycrestOrder[] }>(path, { method: "GET" });
+    return this.request<{ orders: PaycrestOrder[] }>(
+      path,
+      { method: "GET" },
+      options?.signal
+    );
   }
 
   /**
@@ -143,14 +158,16 @@ export class PaycrestApi {
    */
   async getProviderOrderStatus(
     chainId: bigint | number | string,
-    gatewayId: string
+    gatewayId: string,
+    options?: { signal?: AbortSignal }
   ): Promise<PaycrestProviderOrderStatus> {
     if (!gatewayId) {
       throw new Error("Paycrest.getProviderOrderStatus: gatewayId is required");
     }
     return this.request<PaycrestProviderOrderStatus>(
       `/v2/orders/${encodeURIComponent(String(chainId))}/${encodeURIComponent(gatewayId)}`,
-      { method: "GET" }
+      { method: "GET" },
+      options?.signal
     );
   }
 
@@ -162,9 +179,26 @@ export class PaycrestApi {
     }
   }
 
-  private async request<T>(path: string, init: RequestInit): Promise<T> {
+  private async request<T>(
+    path: string,
+    init: RequestInit,
+    callerSignal?: AbortSignal
+  ): Promise<T> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    // Forward an external abort onto our internal controller so the
+    // in-flight fetch is cancelled immediately. Without this, callers
+    // who passed `signal` to a higher-level wait method would have to
+    // wait for `timeoutMs` to elapse before the HTTP request gives up.
+    let onCallerAbort: (() => void) | undefined;
+    if (callerSignal) {
+      if (callerSignal.aborted) {
+        controller.abort();
+      } else {
+        onCallerAbort = () => controller.abort();
+        callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+      }
+    }
     const headers: Record<string, string> = {
       Accept: "application/json",
     };
@@ -209,6 +243,11 @@ export class PaycrestApi {
     } catch (error) {
       const name = errorName(error);
       if (name === "AbortError") {
+        if (callerSignal?.aborted) {
+          throw new Error(
+            `Paycrest API ${init.method ?? "GET"} ${path} aborted by caller signal`
+          );
+        }
         throw new Error(
           `Paycrest API ${init.method ?? "GET"} ${path} timed out after ${this.timeoutMs}ms`
         );
@@ -216,6 +255,9 @@ export class PaycrestApi {
       throw error;
     } finally {
       clearTimeout(timer);
+      if (callerSignal && onCallerAbort) {
+        callerSignal.removeEventListener("abort", onCallerAbort);
+      }
     }
   }
 }

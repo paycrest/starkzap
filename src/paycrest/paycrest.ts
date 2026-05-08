@@ -53,6 +53,37 @@ export class PaycrestOrderError extends Error {
   }
 }
 
+/**
+ * Thrown when an api-path off-ramp's on-chain transfer call fails
+ * **after** the Sender API has already created the order. Carries the
+ * created order's `id` and `receiveAddress` so callers can resume the
+ * transfer (e.g. retry sending tokens to `receiveAddress`) instead of
+ * creating a duplicate order.
+ *
+ * The original execute error is exposed on `cause`.
+ */
+export class PaycrestOfframpExecuteError extends Error {
+  readonly order: PaycrestOrder;
+  readonly orderId: string | undefined;
+  readonly receiveAddress: string;
+  readonly cause: unknown;
+  constructor(
+    message: string,
+    args: {
+      order: PaycrestOrder;
+      receiveAddress: string;
+      cause: unknown;
+    }
+  ) {
+    super(message);
+    this.name = "PaycrestOfframpExecuteError";
+    this.order = args.order;
+    this.orderId = args.order.id;
+    this.receiveAddress = args.receiveAddress;
+    this.cause = args.cause;
+  }
+}
+
 const DEFAULT_SUCCESS_STATES: readonly PaycrestOrderStatus[] = [
   "validated",
   "settled",
@@ -216,7 +247,8 @@ export class Paycrest {
   ): Promise<PaycrestOrder> {
     return this.pollUntilTerminal(
       `waitForOrder(${id})`,
-      () => this.api.getOrder(id),
+      (signal?: AbortSignal) =>
+        this.api.getOrder(id, signal ? { signal } : undefined),
       options
     );
   }
@@ -241,7 +273,12 @@ export class Paycrest {
     const chainId = options.chainId ?? paycrestChainIdFor(ChainId.MAINNET);
     return this.pollUntilTerminal<PaycrestProviderOrderStatus>(
       `waitForGatewayOrder(${gatewayId})`,
-      () => this.api.getProviderOrderStatus(chainId, gatewayId),
+      (signal?: AbortSignal) =>
+        this.api.getProviderOrderStatus(
+          chainId,
+          gatewayId,
+          signal ? { signal } : undefined
+        ),
       options
     );
   }
@@ -253,7 +290,7 @@ export class Paycrest {
    */
   private async pollUntilTerminal<T extends { status: PaycrestOrderStatus }>(
     label: string,
-    fetchStatus: () => Promise<T>,
+    fetchStatus: (signal?: AbortSignal) => Promise<T>,
     options: PaycrestWaitForOrderOptions
   ): Promise<T> {
     const successStates = options.successStates ?? DEFAULT_SUCCESS_STATES;
@@ -269,7 +306,10 @@ export class Paycrest {
           `Paycrest.${label} aborted by signal (last status: ${lastStatus ?? "<none>"})`
         );
       }
-      const result = await fetchStatus();
+      // Forward the caller's signal to the in-flight fetch so an
+      // abort cancels the HTTP request immediately rather than
+      // waiting for it to complete or time out.
+      const result = await fetchStatus(options.signal);
       lastStatus = result.status;
       if (successStates.includes(result.status)) return result;
       if (errorStates.includes(result.status)) {
@@ -455,7 +495,19 @@ export class Paycrest {
     const calls = erc20.populateTransfer([
       { to: fromAddress(receiveAddress), amount: input.from.amount },
     ]);
-    const tx = await wallet.execute(calls, options);
+    let tx: Tx;
+    try {
+      tx = await wallet.execute(calls, options);
+    } catch (cause) {
+      // The order has been persisted server-side. Surfacing it lets
+      // the caller retry the transfer (or call paycrest.getOrder(id))
+      // without recreating the order. Recreating would charge fees
+      // twice and produce two pending orders against the same intent.
+      throw new PaycrestOfframpExecuteError(
+        `Paycrest api off-ramp execute failed after order ${order.id ?? "<unknown>"} was created. Resume by sending ${input.from.amount.toUnit()} ${input.from.token.symbol} to receiveAddress.`,
+        { order, receiveAddress, cause }
+      );
+    }
 
     const partial: Omit<OfframpResult, "wait"> = {
       path: "api",
@@ -477,12 +529,17 @@ export class Paycrest {
     const network = paycrestNetworkFor(chainId);
     const gatewayAddress = this.resolveGatewayAddress(chainId);
 
-    const rateString = await this.fetchRate({
-      network,
-      token: input.from.token.symbol,
-      amount: input.from.amount.toUnit(),
-      fiat: input.to.currency,
-    });
+    // Honor a caller-supplied rate (e.g. one already shown to the user
+    // in the UI). Falls back to fetching `/v2/rates` when omitted so
+    // the gateway path remains usable without a separate quote step.
+    const rateString =
+      input.rate ??
+      (await this.fetchRate({
+        network,
+        token: input.from.token.symbol,
+        amount: input.from.amount.toUnit(),
+        fiat: input.to.currency,
+      }));
 
     const messageHash = await this.encryptRecipientPayload(input.to.recipient);
 
@@ -701,15 +758,12 @@ function buildOnrampApiBody(args: {
 
 /**
  * On-ramp doesn't carry a `chainId` directly. Since this SDK is
- * Starknet-only, we always return `"starknet"` and defensively flag
- * obviously non-Starknet recipients (40-char EVM hex addresses).
+ * Starknet-only, we always return `"starknet"`. We deliberately do
+ * **not** length-check the recipient: a Starknet felt252 address can
+ * legitimately fit in 160 bits (and would print as 40 hex digits),
+ * so any heuristic guard would block valid recipients.
  */
-function inferStarknetNetwork(recipient: Address): PaycrestNetwork {
-  if (typeof recipient === "string" && /^0x[0-9a-fA-F]{40}$/.test(recipient)) {
-    throw new Error(
-      `Paycrest.onramp: recipient looks like an EVM address — Paycrest on Starknet expects a Starknet wallet address.`
-    );
-  }
+function inferStarknetNetwork(_recipient: Address): PaycrestNetwork {
   return "starknet";
 }
 

@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { fromAddress, Paycrest, StarkZap, mainnetTokens } from "starkzap";
+import { fromAddress, Paycrest, mainnetTokens } from "starkzap";
 
 /**
  * On-ramp 50000 NGN -> USDC delivered to a Starknet wallet.
@@ -13,11 +13,8 @@ async function main() {
   const apiKey = required("PAYCREST_API_KEY");
   const walletAddress = fromAddress(required("WALLET_ADDRESS"));
 
-  // No wallet connection needed for on-ramp; the SDK is only used to
-  // hold the chainId/network identifier. You can also just construct
-  // `new Paycrest(...)` directly.
-  void new StarkZap({ network: "mainnet", paycrest: { apiKey } });
-
+  // No wallet connection needed for on-ramp — Paycrest's on-ramp is
+  // Sender-API-only and is wallet-independent.
   const paycrest = new Paycrest({ apiKey });
   const result = await paycrest.onramp({
     from: {

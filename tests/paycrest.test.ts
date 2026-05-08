@@ -11,6 +11,7 @@ import {
   Paycrest,
   PAYCREST_GATEWAY_MAINNET,
   PaycrestApi,
+  PaycrestOfframpExecuteError,
   PaycrestOrderError,
   paycrestNetworkFor,
   paycrestGatewayFor,
@@ -408,29 +409,55 @@ describe("Paycrest on-ramp", () => {
     expect(result.reference).toBe("order-002");
   });
 
-  it("rejects EVM-looking recipients defensively", async () => {
+  it("accepts 40-hex-digit Starknet recipients (valid felt252 that fits in 160 bits)", async () => {
+    // Regression: previously the SDK guarded against /^0x[0-9a-f]{40}$/
+    // recipients on the assumption they were EVM addresses, but a
+    // Starknet felt252 can legitimately have a small numeric value
+    // that prints with only 40 hex digits.
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        201,
+        envelope({
+          id: "ord-x",
+          status: "initiated",
+          providerAccount: {
+            institution: "GTB",
+            accountIdentifier: "0",
+            accountName: "Provider",
+            amountToTransfer: "1000",
+            currency: "NGN",
+          },
+        })
+      )
+    );
     const paycrest = new Paycrest({
       apiKey: "k",
-      fetch: vi.fn() as unknown as typeof fetch,
+      fetch: fetchMock as unknown as typeof fetch,
     });
-    await expect(
-      paycrest.onramp({
-        from: {
-          currency: "NGN",
-          amount: 1000,
-          refundAccount: {
-            institution: "GTB",
-            accountIdentifier: "1",
-            accountName: "x",
-          },
+    const result = await paycrest.onramp({
+      from: {
+        currency: "NGN",
+        amount: 1000,
+        refundAccount: {
+          institution: "GTB",
+          accountIdentifier: "1",
+          accountName: "x",
         },
-        to: {
-          token: USDC,
-          // 40-char EVM hex address
-          recipient: "0xAbCdEf0000000000000000000000000000000001" as Address,
-        },
-      })
-    ).rejects.toThrow(/EVM/i);
+      },
+      to: {
+        token: USDC,
+        recipient: "0x01abcdef000000000000000000000000000000ab" as Address,
+      },
+    });
+    expect(result.orderId).toBe("ord-x");
+    const [, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse(init.body as string) as {
+      destination: { recipient: { address: string; network: string } };
+    };
+    expect(body.destination.recipient.address).toBe(
+      "0x01abcdef000000000000000000000000000000ab"
+    );
+    expect(body.destination.recipient.network).toBe("starknet");
   });
 });
 
@@ -774,6 +801,138 @@ describe("OfframpResult.wait() dispatch", () => {
     await expect(result.wait({ pollIntervalMs: 1 })).rejects.toThrow(
       /no on-chain order id/i
     );
+  });
+});
+
+describe("Paycrest gateway off-ramp — caller-supplied rate", () => {
+  it("uses input.rate without hitting /v2/rates when supplied", async () => {
+    const { publicKey } = buildKeyPair();
+    const fetchMock = vi.fn().mockImplementation(async (url: string | URL) => {
+      const u = String(url);
+      if (u.endsWith("/v2/pubkey"))
+        return jsonResponse(200, envelope(publicKey));
+      if (u.includes("/v2/rates/")) {
+        throw new Error(
+          "rate fetch should be skipped when input.rate is provided"
+        );
+      }
+      throw new Error(`unexpected: ${u}`);
+    });
+    const paycrest = new Paycrest({
+      apiKey: "k",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    const { wallet } = makeFakeWallet();
+
+    const result = await paycrest.offramp(wallet, {
+      from: { token: USDC, amount: Amount.parse("100", USDC) },
+      to: {
+        currency: "NGN",
+        recipient: {
+          institution: "GTBINGLA",
+          accountIdentifier: "1234567890",
+          accountName: "Test",
+        },
+      },
+      rate: "1361.92",
+    });
+
+    expect(result.path).toBe("gateway");
+    expect(result.rate).toBe("1361.92");
+    // Confirm /v2/rates was never hit
+    const rateCalls = fetchMock.mock.calls.filter((c) =>
+      String(c[0]).includes("/v2/rates/")
+    );
+    expect(rateCalls.length).toBe(0);
+    // Decode the create_order rate calldata: rate is the third
+    // argument (token, amount.low, amount.high, rate, ...) — check
+    // it scaled to 136192.
+    const createOrderCall = result.calls[1]!;
+    expect(createOrderCall.calldata).toBeTruthy();
+    // calldata format: [token, amount.low, amount.high, rate, ...]
+    // We assert the rate slot equals 136192 (decimal) as a hex string.
+    const calldataArr = createOrderCall.calldata as string[];
+    expect(BigInt(calldataArr[3]!)).toBe(136192n);
+  });
+});
+
+describe("Paycrest API off-ramp — execute-failure handling", () => {
+  it("throws PaycrestOfframpExecuteError carrying order details when wallet.execute fails", async () => {
+    const receiveAddress =
+      "0x05bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        201,
+        envelope({
+          id: "ord-fail",
+          status: "initiated",
+          providerAccount: { receiveAddress, network: "starknet" },
+        })
+      )
+    );
+    const paycrest = new Paycrest({
+      apiKey: "k",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    const { wallet, executeMock } = makeFakeWallet();
+    const cause = new Error("rpc dropped");
+    executeMock.mockRejectedValueOnce(cause);
+
+    let caught: unknown;
+    try {
+      await paycrest.offramp(wallet, {
+        path: "api",
+        from: { token: USDC, amount: Amount.parse("50", USDC) },
+        to: {
+          currency: "NGN",
+          recipient: {
+            institution: "GTBINGLA",
+            accountIdentifier: "1",
+            accountName: "x",
+          },
+        },
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(PaycrestOfframpExecuteError);
+    const err = caught as PaycrestOfframpExecuteError;
+    expect(err.orderId).toBe("ord-fail");
+    expect(err.receiveAddress).toBe(receiveAddress);
+    expect(err.order.status).toBe("initiated");
+    expect(err.cause).toBe(cause);
+  });
+});
+
+describe("Paycrest abort signal", () => {
+  it("forwards the caller's signal to the in-flight HTTP request", async () => {
+    // Track whether the fetcher saw an aborted signal
+    let observedAborted = false;
+    const fetchMock = vi.fn().mockImplementation(
+      (_url: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            observedAborted = true;
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        })
+    );
+    const paycrest = new Paycrest({
+      apiKey: "k",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    const ac = new AbortController();
+    // Abort almost immediately so the fetch promise rejects via the
+    // signal rather than the request's internal timeout.
+    setTimeout(() => ac.abort(), 5);
+    await expect(
+      paycrest.waitForOrder("ord-1", {
+        pollIntervalMs: 60_000,
+        timeoutMs: 60_000,
+        signal: ac.signal,
+      })
+    ).rejects.toThrow(/aborted/i);
+    expect(observedAborted).toBe(true);
   });
 });
 
