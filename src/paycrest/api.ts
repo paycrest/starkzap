@@ -164,7 +164,7 @@ export class PaycrestApi {
     gatewayId: string,
     options?: { signal?: AbortSignal }
   ): Promise<PaycrestProviderOrderStatus> {
-    if (!gatewayId) {
+    if (!gatewayId || gatewayId.trim() === "") {
       throw new Error("Paycrest.getProviderOrderStatus: gatewayId is required");
     }
     return this.request<PaycrestProviderOrderStatus>(

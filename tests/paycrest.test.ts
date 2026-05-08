@@ -152,6 +152,20 @@ describe("PaycrestApi", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("rejects empty/whitespace gateway ids in getProviderOrderStatus", async () => {
+    const fetchMock = vi.fn();
+    const api = new PaycrestApi({
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    await expect(api.getProviderOrderStatus(1n, "")).rejects.toThrow(
+      /gatewayId is required/i
+    );
+    await expect(api.getProviderOrderStatus(1n, "   ")).rejects.toThrow(
+      /gatewayId is required/i
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("surfaces the server error message on 4xx responses", async () => {
     const fetchMock = vi
       .fn()
