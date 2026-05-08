@@ -476,7 +476,8 @@ export class StarkZap {
         ...(this.config.logging && { logging: this.config.logging }),
       },
       this.config.staking,
-      this.config.bridging
+      this.config.bridging,
+      this.config.paycrest
     );
     return wallet as CartridgeWalletInterface;
   }

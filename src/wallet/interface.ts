@@ -13,6 +13,7 @@ import type { Staking, EndurStaking, EndurStakingOptions } from "@/staking";
 import type { LendingClient } from "@/lending";
 import type { DcaClientInterface } from "@/dca";
 import type { Troves, TrovesOptions } from "@/troves";
+import type { Paycrest, PaycrestOptions } from "@/paycrest";
 import type { PreparedSwap, SwapInput, SwapProvider, SwapQuote } from "@/swap";
 import type {
   Address,
@@ -353,4 +354,23 @@ export interface WalletInterface extends BridgeOperatorInterface {
    * (Troves is a mainnet-only service).
    */
   troves(options?: TrovesOptions): Troves;
+
+  // ============================================================
+  // Paycrest — fiat on/off-ramp
+  // ============================================================
+
+  /**
+   * Get a Paycrest client for fiat on/off-ramps.
+   *
+   * The same instance is returned across calls. **Options only apply on the
+   * first call** — subsequent calls ignore them and return the cached
+   * instance.
+   *
+   * Off-ramp methods (`offramp`, `populateOfframp`) take this wallet as
+   * their first argument; on-ramp (`onramp`) is wallet-independent. See
+   * `Paycrest` for the full API.
+   *
+   * Paycrest is mainnet-only.
+   */
+  paycrest(options?: PaycrestOptions): Paycrest;
 }
