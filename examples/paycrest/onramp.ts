@@ -1,8 +1,9 @@
 import "dotenv/config";
-import { fromAddress, Paycrest, mainnetTokens } from "starkzap";
+import { fromAddress, Paycrest, mainnetTokens, type Token } from "starkzap";
 
 /**
- * On-ramp 50000 NGN -> USDC delivered to a Starknet wallet.
+ * On-ramp 50000 NGN -> stablecoin delivered to a Starknet wallet.
+ * Token defaults to USDT; set `PAYCREST_TOKEN=USDC` to opt into USDC.
  *
  * On-ramp is Sender-API-only — Paycrest does not support on-ramp via
  * the Cairo Gateway. The response carries the bank account the user
@@ -26,7 +27,7 @@ async function main() {
         accountName: required("RECIPIENT_ACCOUNT_NAME"),
       },
     },
-    to: { token: mainnetTokens.USDC, recipient: walletAddress },
+    to: { token: resolveToken(), recipient: walletAddress },
     reference: `onramp-${Date.now()}`,
   });
 
@@ -45,6 +46,15 @@ function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env: ${name}`);
   return v;
+}
+
+function resolveToken(): Token {
+  const symbol = (process.env["PAYCREST_TOKEN"] ?? "USDT").toUpperCase();
+  if (symbol === "USDT") return mainnetTokens.USDT;
+  if (symbol === "USDC") return mainnetTokens.USDC;
+  throw new Error(
+    `PAYCREST_TOKEN must be USDC or USDT (got: ${process.env["PAYCREST_TOKEN"]})`
+  );
 }
 
 main().catch((err) => {

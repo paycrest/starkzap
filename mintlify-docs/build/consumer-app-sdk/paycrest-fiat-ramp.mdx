@@ -121,6 +121,68 @@ const tx = await wallet.tx()
 
 `paycrestOfframp` only supports the gateway path — for the API path, call `paycrest.offramp(wallet, { path: "api", ... })` directly.
 
+## Sponsored transactions (gasless)
+
+The gateway-path off-ramp emits an ERC20 `approve` and a Gateway `create_order` as **one atomic multicall**. That single transaction is the unit your paymaster sponsors — the user pays no gas (or pays in a token of your choice) for both calls together. Pass `feeMode` on the execute step:
+
+```ts
+// Fully sponsored — no gas paid by the user
+const tx = await wallet
+  .tx()
+  .paycrestOfframp({
+    from: { token: mainnetTokens.USDT, amount: Amount.parse("100", mainnetTokens.USDT) },
+    to: { currency: "NGN", recipient: { institution, accountIdentifier, accountName } },
+  })
+  .send({ feeMode: { type: "paymaster" } });
+```
+
+```ts
+// Pay gas in USDT instead of having the paymaster cover it
+const tx = await wallet
+  .tx()
+  .paycrestOfframp({
+    from: { token: mainnetTokens.USDT, amount: Amount.parse("100", mainnetTokens.USDT) },
+    to: { currency: "NGN", recipient: { institution, accountIdentifier, accountName } },
+  })
+  .send({
+    feeMode: {
+      type: "paymaster",
+      gasToken: mainnetTokens.USDT.address,
+    },
+  });
+```
+
+The same `feeMode` works on the direct call: `paycrest.offramp(wallet, input, { feeMode: { type: "paymaster" } })`.
+
+### Cartridge session policies
+
+Cartridge sessions only sign for `(target, method)` pairs you've pre-authorised. The `paycrestGatewaySessionPolicies` helper returns the two pairs the gateway path needs — drop them straight into `connectCartridge`:
+
+```ts
+import {
+  ChainId,
+  mainnetTokens,
+  paycrestGatewaySessionPolicies,
+} from "starkzap";
+
+const policies = paycrestGatewaySessionPolicies({
+  chainId: ChainId.MAINNET,
+  token: mainnetTokens.USDT,
+});
+// → [
+//     { target: USDT.address,            method: "approve" },
+//     { target: PAYCREST_GATEWAY_MAINNET, method: "create_order" },
+//   ]
+
+const wallet = await sdk.connectCartridge({ policies });
+```
+
+With those policies registered the sponsored multicall executes without a popup.
+
+<Note>
+  **API path** is sponsored automatically by the Paycrest aggregator (it batches the approve + create_order server-side and submits via AVNU). You don't need to pass `feeMode`, and there are no Cartridge policies to register — the SDK only emits a single ERC20 `transfer` to the per-order receive address.
+</Note>
+
 ## Tracking order status to terminal
 
 The on-chain transaction is just the first leg of an off-ramp. The order then routes through Paycrest's provider network and only finishes when the fiat side completes (`validated` or `settled`) or fails (`refunded` or `expired`). Two patterns:
@@ -187,6 +249,7 @@ app.post("/webhooks/paycrest", express.raw({ type: "application/json" }), async 
 | `paycrest.offramp(wallet, input, options?)` | Off-ramp via gateway (default) or `path: "api"`. |
 | `paycrest.populateOfframp(wallet, input)` | Build approve + `create_order` Calls without executing. Gateway path only. |
 | `paycrest.onramp(input)` | Create an on-ramp order. Returns provider bank details. |
+| `paycrestGatewaySessionPolicies({ chainId, token })` | Cartridge session policies (`{target, method}[]`) for a sponsored gateway-path off-ramp. |
 | `Paycrest.verifyWebhookSignature(body, sig, secret)` | HMAC-SHA256 timing-safe verifier. |
 
 ### Supported tokens (Starknet mainnet)

@@ -15,10 +15,12 @@ export {
   STARKNET_MAINNET_CHAIN_ID,
   paycrestChainIdFor,
   paycrestGatewayFor,
+  paycrestGatewaySessionPolicies,
   paycrestNetworkFor,
   paycrestTokensFor,
   paycrestMainnetTokens,
 } from "@/paycrest/presets";
+export type { PaycrestSessionPolicy } from "@/paycrest/presets";
 export type {
   OfframpInput,
   OfframpResult,

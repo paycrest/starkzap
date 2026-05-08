@@ -8,6 +8,7 @@ import {
   StarkSigner,
   StarkZap,
   mainnetTokens,
+  type Token,
 } from "starkzap";
 
 /**
@@ -15,6 +16,7 @@ import {
  * returns a `receiveAddress`, and the SDK transfers the tokens to it.
  *
  * Same final outcome as the gateway path, just orchestrated off-chain.
+ * Token defaults to USDT; set `PAYCREST_TOKEN=USDC` to opt into USDC.
  */
 async function main() {
   const apiKey = required("PAYCREST_API_KEY");
@@ -34,12 +36,13 @@ async function main() {
   });
   await wallet.ensureReady({ deploy: "if_needed" });
 
+  const token = resolveToken();
   const paycrest = new Paycrest({ apiKey });
   const result = await paycrest.offramp(wallet, {
     path: "api",
     from: {
-      token: mainnetTokens.USDC,
-      amount: Amount.parse("1", mainnetTokens.USDC),
+      token,
+      amount: Amount.parse("1", token),
     },
     to: {
       currency: "NGN",
@@ -75,6 +78,15 @@ function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env: ${name}`);
   return v;
+}
+
+function resolveToken(): Token {
+  const symbol = (process.env["PAYCREST_TOKEN"] ?? "USDT").toUpperCase();
+  if (symbol === "USDT") return mainnetTokens.USDT;
+  if (symbol === "USDC") return mainnetTokens.USDC;
+  throw new Error(
+    `PAYCREST_TOKEN must be USDC or USDT (got: ${process.env["PAYCREST_TOKEN"]})`
+  );
 }
 
 main().catch((err) => {

@@ -13,8 +13,9 @@ import {
   PaycrestApi,
   PaycrestOfframpExecuteError,
   PaycrestOrderError,
-  paycrestNetworkFor,
   paycrestGatewayFor,
+  paycrestGatewaySessionPolicies,
+  paycrestNetworkFor,
 } from "@/paycrest";
 import type { WalletInterface } from "@/wallet/interface";
 import { Erc20 } from "@/erc20";
@@ -1008,6 +1009,168 @@ describe("Paycrest abort signal", () => {
       })
     ).rejects.toThrow(/aborted/i);
     expect(observedAborted).toBe(true);
+  });
+});
+
+describe("Paycrest paymaster forwarding (sponsored execution)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function buildGatewayPaycrest(): Promise<{
+    paycrest: Paycrest;
+    fetchMock: ReturnType<typeof vi.fn>;
+  }> {
+    const { publicKey } = buildKeyPair();
+    const fetchMock = vi.fn().mockImplementation(async (url: string | URL) => {
+      const u = String(url);
+      if (u.endsWith("/v2/pubkey"))
+        return jsonResponse(200, envelope(publicKey));
+      if (u.includes("/v2/rates/"))
+        return jsonResponse(
+          200,
+          envelope({
+            sell: {
+              rate: "1500",
+              providerIds: [],
+              orderType: "regular",
+              refundTimeoutMinutes: 60,
+            },
+          })
+        );
+      throw new Error(`unexpected fetch: ${u}`);
+    });
+    const paycrest = new Paycrest({
+      apiKey: "k",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    return { paycrest, fetchMock };
+  }
+
+  it("gateway-path offramp() forwards feeMode and submits ONE batched multicall", async () => {
+    const { paycrest } = await buildGatewayPaycrest();
+    const { wallet, executeMock } = makeFakeWallet();
+
+    await paycrest.offramp(
+      wallet,
+      {
+        from: { token: USDC, amount: Amount.parse("1", USDC) },
+        to: {
+          currency: "NGN",
+          recipient: {
+            institution: "GTBINGLA",
+            accountIdentifier: "1",
+            accountName: "x",
+          },
+        },
+      },
+      { feeMode: { type: "paymaster" } }
+    );
+
+    expect(executeMock).toHaveBeenCalledTimes(1);
+    const [calls, options] = executeMock.mock.calls[0]!;
+    // Approve + create_order in a single multicall — proves the
+    // sponsored unit is the whole batch, not two separate txs.
+    expect(calls).toHaveLength(2);
+    expect((calls as { entrypoint: string }[])[0]!.entrypoint).toBe("approve");
+    expect((calls as { entrypoint: string }[])[1]!.entrypoint).toBe(
+      "create_order"
+    );
+    expect(options).toEqual({ feeMode: { type: "paymaster" } });
+  });
+
+  it("gateway-path offramp() forwards feeMode with a custom gasToken", async () => {
+    const { paycrest } = await buildGatewayPaycrest();
+    const { wallet, executeMock } = makeFakeWallet();
+
+    await paycrest.offramp(
+      wallet,
+      {
+        from: { token: USDC, amount: Amount.parse("1", USDC) },
+        to: {
+          currency: "NGN",
+          recipient: {
+            institution: "GTBINGLA",
+            accountIdentifier: "1",
+            accountName: "x",
+          },
+        },
+      },
+      {
+        feeMode: {
+          type: "paymaster",
+          gasToken: USDC.address,
+        },
+      }
+    );
+
+    const [, options] = executeMock.mock.calls[0]!;
+    expect(options.feeMode).toEqual({
+      type: "paymaster",
+      gasToken: USDC.address,
+    });
+  });
+
+  it("api-path offramp() forwards feeMode to wallet.execute on the transfer", async () => {
+    const receiveAddress =
+      "0x05bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(
+        201,
+        envelope({
+          id: "ord-api",
+          status: "initiated",
+          providerAccount: { receiveAddress, network: "starknet" },
+        })
+      )
+    );
+    const paycrest = new Paycrest({
+      apiKey: "k",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    const { wallet, executeMock } = makeFakeWallet();
+
+    await paycrest.offramp(
+      wallet,
+      {
+        path: "api",
+        from: { token: USDC, amount: Amount.parse("1", USDC) },
+        to: {
+          currency: "NGN",
+          recipient: {
+            institution: "GTBINGLA",
+            accountIdentifier: "1",
+            accountName: "x",
+          },
+        },
+      },
+      { feeMode: { type: "paymaster" } }
+    );
+
+    const [calls, options] = executeMock.mock.calls[0]!;
+    expect(calls).toHaveLength(1);
+    expect((calls as { entrypoint: string }[])[0]!.entrypoint).toBe("transfer");
+    expect(options).toEqual({ feeMode: { type: "paymaster" } });
+  });
+
+  it("paycrestGatewaySessionPolicies returns the (target, method) pairs Cartridge needs", () => {
+    const policies = paycrestGatewaySessionPolicies({
+      chainId: ChainId.MAINNET,
+      token: USDC,
+    });
+    expect(policies).toEqual([
+      { target: USDC.address, method: "approve" },
+      { target: PAYCREST_GATEWAY_MAINNET, method: "create_order" },
+    ]);
+  });
+
+  it("paycrestGatewaySessionPolicies throws on sepolia (Paycrest is mainnet-only)", () => {
+    expect(() =>
+      paycrestGatewaySessionPolicies({
+        chainId: ChainId.SEPOLIA,
+        token: USDC,
+      })
+    ).toThrow(/mainnet-only/i);
   });
 });
 

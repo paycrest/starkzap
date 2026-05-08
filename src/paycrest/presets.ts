@@ -73,3 +73,46 @@ export function paycrestTokensFor(chainId: ChainId): readonly Token[] {
     `Paycrest is mainnet-only — no tokens are configured for ${chainId.toLiteral()}.`
   );
 }
+
+/**
+ * Cartridge session policy entry — the same shape `@cartridge/controller`
+ * accepts (a `(target, method)` pair the session is allowed to call
+ * without re-prompting). Re-declared locally so callers can consume
+ * the helper without depending on the cartridge module.
+ */
+export interface PaycrestSessionPolicy {
+  target: string;
+  method: string;
+}
+
+/**
+ * Cartridge session policies for a sponsored Paycrest gateway off-ramp.
+ *
+ * The gateway path emits two calls inside one multicall:
+ *   - ERC20 `approve(gateway, amount)` on `token.address`
+ *   - `create_order(...)` on the Paycrest Gateway
+ *
+ * Both must be pre-authorised in the Cartridge session for the wallet
+ * to execute the bundle without a popup. Drop the result straight into
+ * `sdk.connectCartridge({ policies })`.
+ *
+ * Mainnet-only — throws on Sepolia.
+ *
+ * @example
+ * ```ts
+ * const policies = paycrestGatewaySessionPolicies({
+ *   chainId: ChainId.MAINNET,
+ *   token: mainnetTokens.USDT,
+ * });
+ * const wallet = await sdk.connectCartridge({ policies });
+ * ```
+ */
+export function paycrestGatewaySessionPolicies(args: {
+  chainId: ChainId;
+  token: Token;
+}): PaycrestSessionPolicy[] {
+  return [
+    { target: args.token.address, method: "approve" },
+    { target: paycrestGatewayFor(args.chainId), method: "create_order" },
+  ];
+}

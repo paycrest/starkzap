@@ -8,12 +8,14 @@ import {
   StarkSigner,
   StarkZap,
   mainnetTokens,
+  type Token,
 } from "starkzap";
 
 /**
- * Off-ramp 1 USDC on Starknet -> NGN bank account, via the on-chain
- * Cairo Gateway path. Requires a real mainnet wallet with USDC and an
- * API key from app.paycrest.io.
+ * Off-ramp 1 stablecoin (USDT by default, USDC opt-in via
+ * `PAYCREST_TOKEN`) on Starknet -> NGN bank account, via the on-chain
+ * Cairo Gateway path. Requires a real mainnet wallet with the chosen
+ * token and an API key from app.paycrest.io.
  *
  * Paycrest is mainnet-only — there is no testnet variant.
  */
@@ -36,12 +38,13 @@ async function main() {
 
   await wallet.ensureReady({ deploy: "if_needed" });
 
+  const token = resolveToken();
   const paycrest = new Paycrest({ apiKey });
   const result = await paycrest.offramp(wallet, {
     path: "gateway",
     from: {
-      token: mainnetTokens.USDC,
-      amount: Amount.parse("1", mainnetTokens.USDC),
+      token,
+      amount: Amount.parse("1", token),
     },
     to: {
       currency: "NGN",
@@ -84,6 +87,15 @@ function required(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env: ${name}`);
   return v;
+}
+
+function resolveToken(): Token {
+  const symbol = (process.env["PAYCREST_TOKEN"] ?? "USDT").toUpperCase();
+  if (symbol === "USDT") return mainnetTokens.USDT;
+  if (symbol === "USDC") return mainnetTokens.USDC;
+  throw new Error(
+    `PAYCREST_TOKEN must be USDC or USDT (got: ${process.env["PAYCREST_TOKEN"]})`
+  );
 }
 
 main().catch((err) => {
