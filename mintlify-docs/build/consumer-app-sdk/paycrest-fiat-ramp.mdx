@@ -154,6 +154,30 @@ const tx = await wallet
 
 The same `feeMode` works on the direct call: `paycrest.offramp(wallet, input, { feeMode: { type: "paymaster" } })`.
 
+### Paymaster API key
+
+starkzap defaults to AVNU's public paymaster (`https://starknet.paymaster.avnu.fi`). AVNU now requires the `x-paymaster-api-key` HTTP header for `feeMode: { type: "paymaster" }` (fully sponsored) — without it the paymaster rejects the build with `x-paymaster-api-key is invalid`. Get a key from AVNU and pass it through the SDK config:
+
+```ts
+import { ChainId, StarkZap } from "starkzap";
+
+const sdk = new StarkZap({
+  rpcUrl,
+  chainId: ChainId.MAINNET,
+  paycrest: { apiKey: process.env.PAYCREST_API_KEY },
+  paymaster: {
+    nodeUrl: "SN_MAIN", // or "SN_SEPOLIA" for testnet
+    headers: { "x-paymaster-api-key": process.env.AVNU_PAYMASTER_API_KEY! },
+  },
+});
+```
+
+The `gasToken` flow (user pays gas in a stablecoin) works against AVNU's public endpoint without an api key.
+
+<Note>
+  `nodeUrl` is required when you set `paymaster`. starknet.js's `PaymasterRpc` defaults `nodeUrl` to the Sepolia paymaster when omitted, which causes mainnet transactions to fail with `execution error contract not found`.
+</Note>
+
 ### Cartridge session policies
 
 Cartridge sessions only sign for `(target, method)` pairs you've pre-authorised. The `paycrestGatewaySessionPolicies` helper returns the two pairs the gateway path needs — drop them straight into `connectCartridge`:
@@ -212,6 +236,8 @@ try {
 ```
 
 For lower-level use, `paycrest.waitForOrder(uuidOrReference)` and `paycrest.waitForGatewayOrder(gatewayId, { chainId? })` are both exposed. Defaults: 5s poll interval, 10 min timeout, success states `["validated","settled"]`, error states `["refunded","expired"]`. Pass `signal: AbortSignal` to cancel.
+
+`waitForGatewayOrder` keeps retrying on `404 Order not found` (the aggregator's indexer takes a few seconds to observe an on-chain `OrderCreated` event) until the timeout elapses. Other HTTP failures throw a `PaycrestApiError` immediately — `err.status` carries the HTTP code so you can branch on it.
 
 ### Webhooks (good for production servers)
 

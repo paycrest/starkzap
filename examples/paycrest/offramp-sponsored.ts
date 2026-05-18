@@ -35,6 +35,7 @@ async function main() {
     rpcUrl,
     chainId: ChainId.MAINNET,
     paycrest: { apiKey },
+    ...avnuPaymasterFromEnv(),
   });
 
   const wallet = await sdk.connectWallet({
@@ -52,7 +53,7 @@ async function main() {
   const tx = await wallet
     .tx()
     .paycrestOfframp({
-      from: { token, amount: Amount.parse("1", token) },
+      from: { token, amount: Amount.parse("0.5", token) },
       to: {
         currency: "NGN",
         recipient: {
@@ -136,6 +137,22 @@ function resolveOptionalGasToken(): Token | undefined {
   throw new Error(
     `PAYCREST_GAS_TOKEN must be one of USDT, USDC, STRK, ETH (got: ${symbol})`
   );
+}
+
+// AVNU's public paymaster requires `x-paymaster-api-key` for sponsored mode.
+// When the env var is set, inject it via the `paymaster` config; otherwise
+// fall back to starknet.js's default paymaster. `nodeUrl` is set explicitly
+// because starknet.js's `PaymasterRpc` falls back to the Sepolia paymaster
+// when no `nodeUrl` is provided — this example targets mainnet.
+function avnuPaymasterFromEnv() {
+  const key = process.env["AVNU_PAYMASTER_API_KEY"];
+  if (!key) return {};
+  return {
+    paymaster: {
+      nodeUrl: "SN_MAIN",
+      headers: { "x-paymaster-api-key": key },
+    },
+  } as const;
 }
 
 main().catch((err) => {

@@ -12,6 +12,32 @@ import type {
 export const PAYCREST_API_BASE_DEFAULT = "https://api.paycrest.io";
 const DEFAULT_TIMEOUT_MS = 15_000;
 
+/**
+ * Thrown by {@link PaycrestApi} on a non-2xx HTTP response. `status` is the
+ * raw HTTP code so callers can branch on it (e.g. treat 404 as transient
+ * while an indexer catches up to a freshly-emitted on-chain event).
+ */
+export class PaycrestApiError extends Error {
+  readonly status: number;
+  readonly path: string;
+  readonly method: string;
+  readonly body: unknown;
+  constructor(args: {
+    status: number;
+    method: string;
+    path: string;
+    message: string;
+    body: unknown;
+  }) {
+    super(`Paycrest API ${args.method} ${args.path} failed: ${args.message}`);
+    this.name = "PaycrestApiError";
+    this.status = args.status;
+    this.path = args.path;
+    this.method = args.method;
+    this.body = args.body;
+  }
+}
+
 export interface PaycrestApiOptions {
   apiBaseUrl?: string;
   apiKey?: string;
@@ -230,14 +256,19 @@ export class PaycrestApi {
         signal: controller.signal,
       });
 
+      const method = init.method ?? "GET";
       let parsed: unknown;
       try {
         parsed = await res.json();
       } catch {
         if (!res.ok) {
-          throw new Error(
-            `Paycrest API ${init.method ?? "GET"} ${path} failed: ${res.status} ${res.statusText}`
-          );
+          throw new PaycrestApiError({
+            status: res.status,
+            method,
+            path,
+            message: `${res.status} ${res.statusText}`,
+            body: undefined,
+          });
         }
         throw new Error(`Paycrest API returned non-JSON response for ${path}`);
       }
@@ -245,9 +276,13 @@ export class PaycrestApi {
       if (!res.ok) {
         const message =
           extractErrorMessage(parsed) ?? `${res.status} ${res.statusText}`;
-        throw new Error(
-          `Paycrest API ${init.method ?? "GET"} ${path} failed: ${message}`
-        );
+        throw new PaycrestApiError({
+          status: res.status,
+          method,
+          path,
+          message,
+          body: parsed,
+        });
       }
 
       const envelope = parsed as Partial<PaycrestEnvelope<T>>;

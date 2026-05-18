@@ -11,6 +11,7 @@ import {
   Paycrest,
   PAYCREST_GATEWAY_MAINNET,
   PaycrestApi,
+  PaycrestApiError,
   PaycrestOfframpExecuteError,
   PaycrestOrderError,
   STARKNET_MAINNET_CHAIN_ID,
@@ -750,6 +751,61 @@ describe("Paycrest.waitForGatewayOrder", () => {
     await expect(
       paycrest.waitForGatewayOrder("0xabc", { pollIntervalMs: 1 })
     ).rejects.toBeInstanceOf(PaycrestOrderError);
+  });
+
+  it("retries on 404 while the indexer catches up, then succeeds", async () => {
+    let i = 0;
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      if (i++ < 2) {
+        return jsonResponse(404, { message: "Order not found" });
+      }
+      return jsonResponse(
+        200,
+        envelope({ orderId: "0xabc", status: "settled" })
+      );
+    });
+    const paycrest = new Paycrest({
+      apiKey: "k",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    const result = await paycrest.waitForGatewayOrder("0xabc", {
+      pollIntervalMs: 1,
+    });
+    expect(result.status).toBe("settled");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("times out with a clear message when the indexer never catches up", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(404, { message: "Order not found" }));
+    const paycrest = new Paycrest({
+      apiKey: "k",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    await expect(
+      paycrest.waitForGatewayOrder("0xabc", {
+        pollIntervalMs: 5,
+        timeoutMs: 20,
+      })
+    ).rejects.toThrow(/never indexed/i);
+  });
+
+  it("propagates non-404 API errors immediately", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(500, { message: "Internal Server Error" })
+      );
+    const paycrest = new Paycrest({
+      apiKey: "k",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    await expect(
+      paycrest.waitForGatewayOrder("0xabc", { pollIntervalMs: 1 })
+    ).rejects.toBeInstanceOf(PaycrestApiError);
+    // Should give up after the first non-404 response.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

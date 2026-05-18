@@ -2,16 +2,7 @@ import { describe, expect, it } from "vitest";
 import nodeCrypto from "node:crypto";
 import { encryptRecipient } from "@/paycrest";
 
-/**
- * Generate an in-memory RSA key pair to encrypt against, then verify the
- * SDK's encryptor (`crypto.subtle` in modern Node) produces ciphertext
- * the matching private key can decrypt back to the original plaintext.
- *
- * This validates both:
- *   - PEM (SPKI) → SubtleCrypto importKey path
- *   - RSA-OAEP-SHA256 round-trip end to end
- */
-describe("paycrest encryption (RSA-OAEP-SHA256)", () => {
+describe("paycrest encryption (RSA PKCS1 v1.5)", () => {
   it("encrypts a plaintext that decrypts via the matching private key", async () => {
     const { publicKey, privateKey } = nodeCrypto.generateKeyPairSync("rsa", {
       modulusLength: 2048,
@@ -34,8 +25,7 @@ describe("paycrest encryption (RSA-OAEP-SHA256)", () => {
     const decrypted = nodeCrypto.privateDecrypt(
       {
         key: privateKey,
-        padding: nodeCrypto.constants.RSA_PKCS1_OAEP_PADDING,
-        oaepHash: "sha256",
+        padding: nodeCrypto.constants.RSA_PKCS1_PADDING,
       },
       Buffer.from(base64Ciphertext, "base64")
     );

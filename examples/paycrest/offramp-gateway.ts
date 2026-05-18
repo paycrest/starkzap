@@ -44,7 +44,7 @@ async function main() {
     path: "gateway",
     from: {
       token,
-      amount: Amount.parse("1", token),
+      amount: Amount.parse("0.5", token),
     },
     to: {
       currency: "NGN",

@@ -8,7 +8,7 @@ import {
 } from "@/types";
 import type { Tx } from "@/tx";
 import type { WalletInterface } from "@/wallet/interface";
-import { PaycrestApi } from "@/paycrest/api";
+import { PaycrestApi, PaycrestApiError } from "@/paycrest/api";
 import { encryptRecipient as defaultEncryptRecipient } from "@/paycrest/encryption";
 import { extractOrderIdFromReceipt, PaycrestGateway } from "@/paycrest/gateway";
 import {
@@ -309,7 +309,24 @@ export class Paycrest {
       // Forward the caller's signal to the in-flight fetch so an
       // abort cancels the HTTP request immediately rather than
       // waiting for it to complete or time out.
-      const result = await fetchStatus(options.signal);
+      let result: T;
+      try {
+        result = await fetchStatus(options.signal);
+      } catch (err) {
+        // 404 from the gateway-order endpoint just means the aggregator's
+        // indexer hasn't observed the on-chain `OrderCreated` event yet.
+        // Retry transparently until `timeoutMs` elapses.
+        if (err instanceof PaycrestApiError && err.status === 404) {
+          if (Date.now() >= deadline) {
+            throw new Error(
+              `Paycrest.${label} timed out after ${timeoutMs}ms (order never indexed by Paycrest)`
+            );
+          }
+          await sleep(pollIntervalMs, options.signal);
+          continue;
+        }
+        throw err;
+      }
       lastStatus = result.status;
       if (successStates.includes(result.status)) return result;
       if (errorStates.includes(result.status)) {

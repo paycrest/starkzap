@@ -3,7 +3,11 @@ export {
   PaycrestOfframpExecuteError,
   PaycrestOrderError,
 } from "@/paycrest/paycrest";
-export { PaycrestApi, PAYCREST_API_BASE_DEFAULT } from "@/paycrest/api";
+export {
+  PaycrestApi,
+  PaycrestApiError,
+  PAYCREST_API_BASE_DEFAULT,
+} from "@/paycrest/api";
 export {
   PaycrestGateway,
   ORDER_CREATED_EVENT_SELECTOR,

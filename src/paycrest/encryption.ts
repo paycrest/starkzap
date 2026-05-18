@@ -1,9 +1,16 @@
 /**
- * RSA-OAEP-SHA256 encryption for Paycrest recipient details (gateway path).
+ * RSA PKCS1 v1.5 encryption for Paycrest recipient details (gateway path).
  *
- * Auto-detects the runtime: prefers `globalThis.crypto.subtle` (browsers,
- * React Native via polyfills, modern workers) and falls back to Node's
- * `node:crypto.publicEncrypt` when SubtleCrypto isn't available.
+ * The Paycrest aggregator decrypts `message_hash` with Go's
+ * `crypto/rsa.DecryptPKCS1v15`, so the SDK must encrypt with the matching
+ * PKCS1 v1.5 padding (NOT OAEP — those are incompatible at the byte level).
+ *
+ * Runtime auto-detection:
+ *   - Node / Bun / SSR / Deno-with-Node-shim: `node:crypto.publicEncrypt`
+ *     with `RSA_PKCS1_PADDING`.
+ *   - True browsers / RN / Workers: a small BigInt-based PKCS1 v1.5 encoder
+ *     plus raw RSA exponentiation. WebCrypto's `subtle.encrypt` only
+ *     supports OAEP for RSA, which the aggregator can't decrypt.
  *
  * The Cairo Gateway expects the encrypted blob as a UTF-8 ByteArray on
  * `create_order`. Both code paths return a base64-encoded string; pass it
@@ -13,10 +20,6 @@
 const PEM_BEGIN = "-----BEGIN PUBLIC KEY-----";
 const PEM_END = "-----END PUBLIC KEY-----";
 
-/**
- * Strip PEM armor and base64-decode the SPKI body to a Uint8Array
- * suitable for `crypto.subtle.importKey("spki", ...)`.
- */
 function pemToSpki(pem: string): Uint8Array {
   const trimmed = pem.trim();
   const start = trimmed.indexOf(PEM_BEGIN);
@@ -41,7 +44,6 @@ function base64Decode(value: string): Uint8Array {
     }
     return bytes;
   }
-  // Node fallback (atob is global on Node 18+, but be defensive).
   const buf = (
     globalThis as { Buffer?: { from(s: string, e: string): Uint8Array } }
   ).Buffer?.from(value, "base64");
@@ -66,91 +68,185 @@ function base64Encode(bytes: Uint8Array): string {
   throw new Error("No base64 encoder available in this environment");
 }
 
-interface SubtleCryptoLike {
-  importKey(
-    format: "spki",
-    keyData: BufferSource,
-    algorithm: { name: "RSA-OAEP"; hash: "SHA-256" },
-    extractable: boolean,
-    keyUsages: ["encrypt"]
-  ): Promise<CryptoKey>;
-  encrypt(
-    algorithm: { name: "RSA-OAEP" },
-    key: CryptoKey,
-    data: BufferSource
-  ): Promise<ArrayBuffer>;
-}
-
-function getSubtle(): SubtleCryptoLike | null {
-  const subtle = (globalThis as { crypto?: { subtle?: SubtleCryptoLike } })
-    .crypto?.subtle;
-  return subtle ?? null;
-}
-
-async function encryptViaSubtle(
-  subtle: SubtleCryptoLike,
-  pem: string,
-  plaintext: string
-): Promise<string> {
-  const spki = pemToSpki(pem);
-  const key = await subtle.importKey(
-    "spki",
-    toArrayBuffer(spki),
-    { name: "RSA-OAEP", hash: "SHA-256" },
-    false,
-    ["encrypt"]
-  );
-  const encoded = new TextEncoder().encode(plaintext);
-  const ciphertext = await subtle.encrypt(
-    { name: "RSA-OAEP" },
-    key,
-    toArrayBuffer(encoded)
-  );
-  return base64Encode(new Uint8Array(ciphertext));
-}
-
-/**
- * Copy a `Uint8Array` into a fresh `ArrayBuffer` so it satisfies the
- * `BufferSource` constraint on SubtleCrypto methods (TS now requires
- * `ArrayBufferView<ArrayBuffer>`, not `ArrayBufferLike`).
- */
-function toArrayBuffer(view: Uint8Array): ArrayBuffer {
-  const buf = new ArrayBuffer(view.byteLength);
-  new Uint8Array(buf).set(view);
-  return buf;
-}
-
 async function encryptViaNode(pem: string, plaintext: string): Promise<string> {
-  // Lazy-load `node:crypto` so bundlers don't pull it into browser builds.
   const nodeCrypto =
     (await import("node:crypto")) as typeof import("node:crypto");
   const ciphertext = nodeCrypto.publicEncrypt(
     {
       key: pem,
-      padding: nodeCrypto.constants.RSA_PKCS1_OAEP_PADDING,
-      oaepHash: "sha256",
+      padding: nodeCrypto.constants.RSA_PKCS1_PADDING,
     },
     Buffer.from(plaintext, "utf8")
   );
   return ciphertext.toString("base64");
 }
 
+// --- Browser / WebCrypto path: manual PKCS1 v1.5 + raw RSA --- //
+
+interface DerField {
+  tag: number;
+  valueStart: number;
+  valueEnd: number;
+}
+
+function readDer(bytes: Uint8Array, offset: number): DerField {
+  const tag = bytes[offset];
+  if (tag === undefined) throw new Error("DER: unexpected end of input");
+  let length = bytes[offset + 1];
+  if (length === undefined) throw new Error("DER: unexpected end of input");
+  let valueStart = offset + 2;
+  if (length & 0x80) {
+    const numLenBytes = length & 0x7f;
+    length = 0;
+    for (let i = 0; i < numLenBytes; i++) {
+      const b = bytes[valueStart + i];
+      if (b === undefined) throw new Error("DER: truncated length");
+      length = (length << 8) | b;
+    }
+    valueStart += numLenBytes;
+  }
+  return { tag, valueStart, valueEnd: valueStart + length };
+}
+
+function bytesToBigint(bytes: Uint8Array): bigint {
+  let n = 0n;
+  for (let i = 0; i < bytes.length; i++) {
+    n = (n << 8n) | BigInt(bytes[i]!);
+  }
+  return n;
+}
+
+function bigintToFixedBytes(n: bigint, length: number): Uint8Array {
+  const out = new Uint8Array(length);
+  let v = n;
+  for (let i = length - 1; i >= 0; i--) {
+    out[i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+  if (v !== 0n) throw new Error("RSA: integer overflows modulus length");
+  return out;
+}
+
+function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
+  let result = 1n;
+  let b = base % mod;
+  let e = exp;
+  while (e > 0n) {
+    if (e & 1n) result = (result * b) % mod;
+    e >>= 1n;
+    b = (b * b) % mod;
+  }
+  return result;
+}
+
+function parseRsaSpki(pem: string): { n: bigint; e: bigint; k: number } {
+  const spki = pemToSpki(pem);
+  // SubjectPublicKeyInfo ::= SEQUENCE { AlgorithmIdentifier, BIT STRING }
+  const outer = readDer(spki, 0);
+  if (outer.tag !== 0x30)
+    throw new Error("RSA: SPKI outer SEQUENCE tag missing");
+  const algId = readDer(spki, outer.valueStart);
+  if (algId.tag !== 0x30)
+    throw new Error("RSA: AlgorithmIdentifier SEQUENCE tag missing");
+  const bitString = readDer(spki, algId.valueEnd);
+  if (bitString.tag !== 0x03) throw new Error("RSA: BIT STRING tag missing");
+  // First byte of BIT STRING value is the unused-bit count (must be 0).
+  if (spki[bitString.valueStart] !== 0)
+    throw new Error("RSA: unsupported unused bits in BIT STRING");
+  // Inside the BIT STRING: RSAPublicKey ::= SEQUENCE { INTEGER n, INTEGER e }
+  const rsaSeq = readDer(spki, bitString.valueStart + 1);
+  if (rsaSeq.tag !== 0x30)
+    throw new Error("RSA: RSAPublicKey SEQUENCE tag missing");
+  const nInt = readDer(spki, rsaSeq.valueStart);
+  if (nInt.tag !== 0x02) throw new Error("RSA: modulus INTEGER tag missing");
+  const eInt = readDer(spki, nInt.valueEnd);
+  if (eInt.tag !== 0x02) throw new Error("RSA: exponent INTEGER tag missing");
+  const n = bytesToBigint(spki.subarray(nInt.valueStart, nInt.valueEnd));
+  const e = bytesToBigint(spki.subarray(eInt.valueStart, eInt.valueEnd));
+  // PKCS1 ciphertext byte length equals byte length of modulus.
+  const k = Math.ceil(n.toString(2).length / 8);
+  return { n, e, k };
+}
+
+function getRandomBytes(length: number): Uint8Array {
+  const g = (
+    globalThis as {
+      crypto?: { getRandomValues?: (a: Uint8Array) => Uint8Array };
+    }
+  ).crypto;
+  if (g?.getRandomValues) {
+    const out = new Uint8Array(length);
+    g.getRandomValues(out);
+    return out;
+  }
+  throw new Error("RSA: no crypto.getRandomValues available in this runtime");
+}
+
+// PKCS1 v1.5 type-2 encryption padding (RFC 8017 §7.2.1).
+// EM = 0x00 || 0x02 || PS || 0x00 || M
+// where PS is `k - mLen - 3` cryptographically-random non-zero bytes.
+function pkcs1v15PadType2(message: Uint8Array, k: number): Uint8Array {
+  if (message.length > k - 11)
+    throw new Error(
+      `RSA: plaintext too long for modulus (max ${k - 11} bytes, got ${message.length})`
+    );
+  const psLen = k - message.length - 3;
+  const ps = new Uint8Array(psLen);
+  let filled = 0;
+  // Resample until every byte is non-zero (rejection sampling).
+  while (filled < psLen) {
+    const draw = getRandomBytes(psLen - filled);
+    for (let i = 0; i < draw.length && filled < psLen; i++) {
+      const b = draw[i]!;
+      if (b !== 0) ps[filled++] = b;
+    }
+  }
+  const em = new Uint8Array(k);
+  em[0] = 0x00;
+  em[1] = 0x02;
+  em.set(ps, 2);
+  em[2 + psLen] = 0x00;
+  em.set(message, 3 + psLen);
+  return em;
+}
+
+function encryptViaWebCrypto(pem: string, plaintext: string): string {
+  const { n, e, k } = parseRsaSpki(pem);
+  const message = new TextEncoder().encode(plaintext);
+  const em = pkcs1v15PadType2(message, k);
+  const m = bytesToBigint(em);
+  if (m >= n) throw new Error("RSA: padded message >= modulus");
+  const c = modPow(m, e, n);
+  return base64Encode(bigintToFixedBytes(c, k));
+}
+
 /**
- * Encrypts `plaintext` with the aggregator's RSA public key (PEM, SPKI).
- *
- * - Uses `crypto.subtle.encrypt({name: "RSA-OAEP"}, ...)` when SubtleCrypto
- *   is available (browsers, React Native, modern workers).
- * - Falls back to `node:crypto.publicEncrypt(..., RSA_PKCS1_OAEP_PADDING,
- *   oaepHash: "sha256")` in Node.
- *
- * Returns base64-encoded ciphertext. Output of both paths decrypts to the
- * same plaintext via the corresponding private key.
+ * Encrypts `plaintext` with the aggregator's RSA public key (PEM, SPKI)
+ * using PKCS1 v1.5 padding. Returns base64-encoded ciphertext that
+ * Go's `crypto/rsa.DecryptPKCS1v15` (and other PKCS1 v1.5 decryptors)
+ * can recover.
  */
 export async function encryptRecipient(
   publicKeyPem: string,
   plaintext: string
 ): Promise<string> {
-  const subtle = getSubtle();
-  if (subtle) return encryptViaSubtle(subtle, publicKeyPem, plaintext);
-  return encryptViaNode(publicKeyPem, plaintext);
+  // Validate PEM shape up front so the error is consistent across runtimes
+  // (node:crypto delegates to OpenSSL which produces a different message).
+  pemToSpki(publicKeyPem);
+  // Prefer `node:crypto` whenever it's importable — covers Node, Bun, SSR,
+  // and edge runtimes that ship a Node-compat layer. Only fall back to the
+  // BigInt path in environments where the import throws (true browsers).
+  try {
+    return await encryptViaNode(publicKeyPem, plaintext);
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      (err.message.includes("Cannot find module") ||
+        err.message.includes("Failed to resolve") ||
+        err.message.includes("Dynamic require"))
+    ) {
+      return encryptViaWebCrypto(publicKeyPem, plaintext);
+    }
+    throw err;
+  }
 }
