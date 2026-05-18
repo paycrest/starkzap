@@ -43,6 +43,8 @@ import type {
 import { Erc20 } from "@/erc20";
 import { Staking, EndurStaking, type EndurStakingOptions } from "@/staking";
 import { Troves, type TrovesOptions } from "@/troves";
+import { Paycrest, type PaycrestOptions } from "@/paycrest";
+import type { PaycrestConfig } from "@/types/config";
 import type { PreparedSwap, SwapInput, SwapProvider, SwapQuote } from "@/swap";
 import { AvnuSwapProvider } from "@/swap";
 import { resolveSwapInput } from "@/swap/utils";
@@ -118,6 +120,8 @@ export abstract class BaseWallet implements WalletInterface {
   private stakingInFlight: Map<Address, Promise<Staking>> = new Map();
   private lstStakingMap: Map<string, EndurStaking> = new Map();
   private trovesInstance: Troves | undefined;
+  private paycrestInstance: Paycrest | undefined;
+  private readonly paycrestConfig: PaycrestConfig | undefined;
 
   private readonly bridging: BridgeOperator;
 
@@ -131,6 +135,7 @@ export abstract class BaseWallet implements WalletInterface {
     address: Address;
     stakingConfig?: StakingConfig | undefined;
     bridgingConfig?: BridgingConfig | undefined;
+    paycrestConfig?: PaycrestConfig | undefined;
     defaultSwapProvider?: SwapProvider | undefined;
     defaultLendingProvider?: LendingProvider | undefined;
     defaultDcaProvider?: DcaProvider | undefined;
@@ -138,6 +143,7 @@ export abstract class BaseWallet implements WalletInterface {
   }) {
     this.address = options.address;
     this.stakingConfig = options.stakingConfig;
+    this.paycrestConfig = options.paycrestConfig;
     this.logger = createLogger(options.logging);
     this.bridging = new BridgeOperator(
       this,
@@ -827,6 +833,23 @@ export abstract class BaseWallet implements WalletInterface {
       this.trovesInstance = new Troves(this, options);
     }
     return this.trovesInstance;
+  }
+
+  /**
+   * Get a Paycrest client for fiat on/off-ramps. Configuration is
+   * pulled from `SDKConfig.paycrest` if not overridden at call time.
+   *
+   * The same instance is returned across calls. `options` only takes
+   * effect on the first call — construct `Paycrest` directly if you
+   * need different settings later.
+   */
+  paycrest(options?: PaycrestOptions): Paycrest {
+    if (!this.paycrestInstance) {
+      const merged: PaycrestOptions = { ...(this.paycrestConfig ?? {}) };
+      if (options) Object.assign(merged, options);
+      this.paycrestInstance = new Paycrest(merged);
+    }
+    return this.paycrestInstance;
   }
 
   /** {@inheritDoc WalletInterface.initiateWithdraw} */
