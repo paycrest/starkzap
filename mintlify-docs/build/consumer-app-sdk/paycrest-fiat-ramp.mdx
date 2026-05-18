@@ -204,7 +204,7 @@ const wallet = await sdk.connectCartridge({ policies });
 With those policies registered the sponsored multicall executes without a popup.
 
 <Note>
-  **API path** is sponsored automatically by the Paycrest aggregator (it batches the approve + create_order server-side and submits via AVNU). You don't need to pass `feeMode`, and there are no Cartridge policies to register — the SDK only emits a single ERC20 `transfer` to the per-order receive address.
+  **API path** has Paycrest's aggregator batch `approve + create_order` server-side, so the on-chain footprint is just a single ERC20 `transfer` from the user's wallet to the per-order `receiveAddress`. You can still pass the same `feeMode` to sponsor that transfer via your paymaster — no Cartridge policies needed.
 </Note>
 
 ## Tracking order status to terminal
