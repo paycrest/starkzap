@@ -7,6 +7,7 @@ import {
   type Address,
   type Token,
 } from "@/types";
+import { mainnetTokens } from "@/erc20/token/presets";
 import {
   Paycrest,
   PAYCREST_GATEWAY_MAINNET,
@@ -95,8 +96,9 @@ describe("Paycrest rate scaling (u128, 2 decimals)", () => {
     expect(rateToU128("0.01")).toBe(1n);
     expect(rateToU128("1500.5")).toBe(150050n); // missing trailing zero is padded
     expect(rateToU128("1500.50")).toBe(150050n);
-    // Strips any leading non-digit (e.g. accidental "$1500")
-    expect(rateToU128("$1500")).toBe(150000n);
+    // Surrounding whitespace is tolerated (trimmed) since spaces don't
+    // change the numeric value.
+    expect(rateToU128("  1500  ")).toBe(150000n);
   });
 
   it("throws on more than 2 decimal places (no silent truncation)", async () => {
@@ -106,6 +108,17 @@ describe("Paycrest rate scaling (u128, 2 decimals)", () => {
     const { rateToU128 } = await import("@/paycrest/paycrest");
     expect(() => rateToU128("1361.999")).toThrow(/decimal places/i);
     expect(() => rateToU128("1500.501")).toThrow(/decimal places/i);
+  });
+
+  it("rejects negative or non-numeric input rather than coercing", async () => {
+    // The old lenient stripper turned "-1.23" into "1.23" — a
+    // materially different on-chain rate. Reject those inputs so the
+    // bug surfaces at the validation layer instead of as a wrong order.
+    const { rateToU128 } = await import("@/paycrest/paycrest");
+    expect(() => rateToU128("-1.23")).toThrow(/not a valid/i);
+    expect(() => rateToU128("$1500")).toThrow(/not a valid/i);
+    expect(() => rateToU128("1.2e3")).toThrow(/not a valid/i);
+    expect(() => rateToU128("")).toThrow(/not a valid/i);
   });
 });
 
@@ -697,6 +710,23 @@ describe("Paycrest.waitForOrder", () => {
     });
     expect(order.status).toBe("deposited");
   });
+
+  it("fails immediately on 404 (api-path 404 means bad id, not indexer lag)", async () => {
+    // Only `waitForGatewayOrder` should treat 404 as transient — for
+    // `waitForOrder` (api-path UUID), a 404 is a definitive bad-id
+    // response and must fail fast rather than wait out the timeout.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(404, { message: "Order not found" }));
+    const paycrest = new Paycrest({
+      apiKey: "k",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    await expect(
+      paycrest.waitForOrder("ord-missing", { pollIntervalMs: 1 })
+    ).rejects.toBeInstanceOf(PaycrestApiError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("Paycrest.waitForGatewayOrder", () => {
@@ -1259,10 +1289,10 @@ describe("Paycrest paymaster forwarding (sponsored execution)", () => {
   it("paycrestGatewaySessionPolicies returns the (target, method) pairs Cartridge needs", () => {
     const policies = paycrestGatewaySessionPolicies({
       chainId: ChainId.MAINNET,
-      token: USDC,
+      token: mainnetTokens.USDC,
     });
     expect(policies).toEqual([
-      { target: USDC.address, method: "approve" },
+      { target: mainnetTokens.USDC.address, method: "approve" },
       { target: PAYCREST_GATEWAY_MAINNET, method: "create_order" },
     ]);
   });
@@ -1271,9 +1301,20 @@ describe("Paycrest paymaster forwarding (sponsored execution)", () => {
     expect(() =>
       paycrestGatewaySessionPolicies({
         chainId: ChainId.SEPOLIA,
-        token: USDC,
+        token: mainnetTokens.USDC,
       })
     ).toThrow(/mainnet-only/i);
+  });
+
+  it("paycrestGatewaySessionPolicies rejects tokens Paycrest doesn't support", () => {
+    // Pre-empting an authorisation that would be useless on-chain — the
+    // Gateway rejects any token outside `paycrestTokensFor(chainId)`.
+    expect(() =>
+      paycrestGatewaySessionPolicies({
+        chainId: ChainId.MAINNET,
+        token: mainnetTokens.STRK,
+      })
+    ).toThrow(/not supported by Paycrest/i);
   });
 });
 

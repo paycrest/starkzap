@@ -233,20 +233,15 @@ export async function encryptRecipient(
   // Validate PEM shape up front so the error is consistent across runtimes
   // (node:crypto delegates to OpenSSL which produces a different message).
   pemToSpki(publicKeyPem);
-  // Prefer `node:crypto` whenever it's importable — covers Node, Bun, SSR,
-  // and edge runtimes that ship a Node-compat layer. Only fall back to the
-  // BigInt path in environments where the import throws (true browsers).
-  try {
-    return await encryptViaNode(publicKeyPem, plaintext);
-  } catch (err) {
-    if (
-      err instanceof Error &&
-      (err.message.includes("Cannot find module") ||
-        err.message.includes("Failed to resolve") ||
-        err.message.includes("Dynamic require"))
-    ) {
-      return encryptViaWebCrypto(publicKeyPem, plaintext);
-    }
-    throw err;
+  // Pick the encryptor by runtime feature detection rather than catching
+  // bundler-specific import errors (the exact string varies across Vite,
+  // Webpack, Rollup, esbuild — matching them is brittle). Any host that
+  // exposes `process.versions.node` is Node, Bun, or a Node-compat layer
+  // (Deno --node-compat, etc.); everything else uses the BigInt path.
+  const proc = (globalThis as { process?: { versions?: { node?: string } } })
+    .process;
+  if (typeof proc?.versions?.node === "string") {
+    return encryptViaNode(publicKeyPem, plaintext);
   }
+  return encryptViaWebCrypto(publicKeyPem, plaintext);
 }

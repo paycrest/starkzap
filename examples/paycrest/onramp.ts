@@ -43,7 +43,7 @@ async function main() {
 }
 
 function required(name: string): string {
-  const v = process.env[name];
+  const v = process.env[name]?.trim();
   if (!v) throw new Error(`Missing env: ${name}`);
   return v;
 }

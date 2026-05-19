@@ -81,7 +81,7 @@ export function paycrestTokensFor(chainId: ChainId): readonly Token[] {
  * the helper without depending on the cartridge module.
  */
 export interface PaycrestSessionPolicy {
-  target: string;
+  target: Address;
   method: string;
 }
 
@@ -111,6 +111,15 @@ export function paycrestGatewaySessionPolicies(args: {
   chainId: ChainId;
   token: Token;
 }): PaycrestSessionPolicy[] {
+  // Fail fast on non-Paycrest tokens: the session would otherwise
+  // authorise calls for a flow that's guaranteed to fail later on-chain
+  // (the Gateway rejects unsupported tokens in `create_order`).
+  const supported = paycrestTokensFor(args.chainId);
+  if (!supported.some((t) => t.address === args.token.address)) {
+    throw new Error(
+      `Token ${args.token.address} is not supported by Paycrest on ${args.chainId.toLiteral()}. Supported: ${supported.map((t) => t.symbol).join(", ")}.`
+    );
+  }
   return [
     { target: args.token.address, method: "approve" },
     { target: paycrestGatewayFor(args.chainId), method: "create_order" },

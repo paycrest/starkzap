@@ -198,10 +198,12 @@ export interface PaycrestWebhookPayload {
 }
 
 /**
- * Pluggable encryptor used for the Gateway path. The default implementation
- * is RSA-OAEP-SHA256 backed by `crypto.subtle` in browsers/RN and
- * `node:crypto.publicEncrypt` in Node — see `encryption.ts`. Inject a custom
- * function only if you need a non-default RSA library.
+ * Pluggable encryptor used for the Gateway path. The default
+ * implementation is RSA PKCS1 v1.5 (matching the aggregator's Go
+ * `crypto/rsa.DecryptPKCS1v15`) — `node:crypto.publicEncrypt` in
+ * Node/Bun/SSR, a BigInt-based PKCS1 v1.5 + raw RSA fallback in
+ * browsers/RN where WebCrypto can't do PKCS1 v1.5. See `encryption.ts`.
+ * Inject a custom function only if you need a non-default RSA library.
  */
 export type PaycrestEncryptor = (
   publicKeyPem: string,
@@ -236,7 +238,7 @@ export interface PaycrestOptions {
   gatewayAddress?: Address;
   /** Inject a `fetch` implementation (testing or custom HTTP runtime). */
   fetch?: typeof fetch;
-  /** Inject a custom recipient encryptor (default: built-in RSA-OAEP-SHA256). */
+  /** Inject a custom recipient encryptor (default: built-in RSA PKCS1 v1.5). */
   encryptRecipient?: PaycrestEncryptor;
   /** Per-request timeout in milliseconds. Defaults to 15000. */
   requestTimeoutMs?: number;
@@ -265,8 +267,10 @@ export interface OfframpInput {
   /** App-side identifier echoed back on the order and webhook. Optional. */
   reference?: string;
   /**
-   * Optional pre-fetched rate. Used only for the API path; the gateway
-   * path always fetches its own rate from `/v2/rates`.
+   * Optional pre-fetched rate. Honored on both paths — the API path
+   * forwards it in the `POST /v2/sender/orders` body, the gateway path
+   * uses it in the on-chain `create_order` call (skipping a redundant
+   * `/v2/rates` fetch when omitted, it falls back to fetching).
    */
   rate?: string;
   /**
@@ -317,7 +321,11 @@ export interface OfframpResult {
   providerAccount?: PaycrestProviderAccount;
   /** ERC20 receive address on the api path. */
   receiveAddress?: string;
-  /** Rate used for the order (gateway path only — string from `/v2/rates`). */
+  /**
+   * Rate used for the on-chain order (gateway path only). Either the
+   * caller-supplied `input.rate` or the rate fetched from `/v2/rates`
+   * when `input.rate` was omitted.
+   */
   rate?: string;
   /**
    * Wait for fiat settlement. Polls the correct aggregator endpoint

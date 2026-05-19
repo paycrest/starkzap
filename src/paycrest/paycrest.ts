@@ -279,7 +279,12 @@ export class Paycrest {
           gatewayId,
           signal ? { signal } : undefined
         ),
-      options
+      options,
+      // 404 is transient here while the aggregator's indexer catches up
+      // to a freshly-emitted on-chain `OrderCreated` event. The api-path
+      // poller below intentionally does NOT enable this — a 404 there
+      // means a bad UUID and should fail immediately.
+      { retryOnNotFound: true }
     );
   }
 
@@ -291,7 +296,8 @@ export class Paycrest {
   private async pollUntilTerminal<T extends { status: PaycrestOrderStatus }>(
     label: string,
     fetchStatus: (signal?: AbortSignal) => Promise<T>,
-    options: PaycrestWaitForOrderOptions
+    options: PaycrestWaitForOrderOptions,
+    pollerOptions: { retryOnNotFound?: boolean } = {}
   ): Promise<T> {
     const successStates = options.successStates ?? DEFAULT_SUCCESS_STATES;
     const errorStates = options.errorStates ?? DEFAULT_ERROR_STATES;
@@ -313,10 +319,14 @@ export class Paycrest {
       try {
         result = await fetchStatus(options.signal);
       } catch (err) {
-        // 404 from the gateway-order endpoint just means the aggregator's
-        // indexer hasn't observed the on-chain `OrderCreated` event yet.
-        // Retry transparently until `timeoutMs` elapses.
-        if (err instanceof PaycrestApiError && err.status === 404) {
+        // Retry-on-404 is only enabled for callers that expect indexer
+        // lag (currently `waitForGatewayOrder`). For everything else a
+        // 404 is a definitive "no such order" — fail fast.
+        if (
+          pollerOptions.retryOnNotFound &&
+          err instanceof PaycrestApiError &&
+          err.status === 404
+        ) {
           if (Date.now() >= deadline) {
             throw new Error(
               `Paycrest.${label} timed out after ${timeoutMs}ms (order never indexed by Paycrest)`
@@ -799,7 +809,17 @@ function inferStarknetNetwork(_recipient: Address): PaycrestNetwork {
  */
 export function rateToU128(decimalString: string): bigint {
   // Convert "1500.50" -> 150050n given RATE_DECIMALS = 2.
-  const [whole = "0", fractional = ""] = decimalString.split(".");
+  // Reject anything that isn't a non-negative decimal — previously a
+  // lenient `replace(/^[^0-9]+/, "")` silently turned "-1.23" into
+  // "1.23", which would submit a materially wrong rate on-chain.
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(decimalString.trim());
+  if (!match) {
+    throw new Error(
+      `Paycrest rate "${decimalString}" is not a valid non-negative decimal — trim any prefix (e.g. "$") and reject negatives upstream.`
+    );
+  }
+  const whole = match[1]!;
+  const fractional = match[2] ?? "";
   if (fractional.length > Number(RATE_DECIMALS)) {
     // Silently truncating would let the caller submit a different
     // rate than the one they fetched/displayed. Throw so the caller
@@ -812,8 +832,7 @@ export function rateToU128(decimalString: string): bigint {
     0,
     Number(RATE_DECIMALS)
   );
-  const cleanedWhole = whole.replace(/^[^0-9]+/, "");
-  return BigInt(cleanedWhole + padded);
+  return BigInt(whole + padded);
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {

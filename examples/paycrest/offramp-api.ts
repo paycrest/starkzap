@@ -89,23 +89,30 @@ async function main() {
   }
 }
 
+// Trim env values and treat empty / whitespace-only strings as missing,
+// so callers can't accidentally pass a blank token or api key past the
+// validation gate and into a confusing runtime failure downstream.
+function envValue(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value && value.length > 0 ? value : undefined;
+}
+
 function required(name: string): string {
-  const v = process.env[name];
+  const v = envValue(name);
   if (!v) throw new Error(`Missing env: ${name}`);
   return v;
 }
 
 function resolveToken(): Token {
-  const symbol = (process.env["PAYCREST_TOKEN"] ?? "USDT").toUpperCase();
+  const raw = envValue("PAYCREST_TOKEN");
+  const symbol = (raw ?? "USDT").toUpperCase();
   if (symbol === "USDT") return mainnetTokens.USDT;
   if (symbol === "USDC") return mainnetTokens.USDC;
-  throw new Error(
-    `PAYCREST_TOKEN must be USDC or USDT (got: ${process.env["PAYCREST_TOKEN"]})`
-  );
+  throw new Error(`PAYCREST_TOKEN must be USDC or USDT (got: ${raw})`);
 }
 
 function resolveOptionalGasToken(): Token | undefined {
-  const symbol = process.env["PAYCREST_GAS_TOKEN"];
+  const symbol = envValue("PAYCREST_GAS_TOKEN");
   if (!symbol) return undefined;
   const upper = symbol.toUpperCase();
   if (upper === "USDT") return mainnetTokens.USDT;
@@ -125,7 +132,7 @@ function resolveOptionalGasToken(): Token | undefined {
 // falls back to the Sepolia paymaster when no `nodeUrl` is provided —
 // this example targets mainnet.
 function avnuPaymasterFromEnv() {
-  const key = process.env["AVNU_PAYMASTER_API_KEY"];
+  const key = envValue("AVNU_PAYMASTER_API_KEY");
   if (!key) return {};
   return {
     paymaster: {
@@ -136,7 +143,7 @@ function avnuPaymasterFromEnv() {
 }
 
 function resolveFeeMode(): FeeMode | undefined {
-  const key = process.env["AVNU_PAYMASTER_API_KEY"];
+  const key = envValue("AVNU_PAYMASTER_API_KEY");
   const gasToken = resolveOptionalGasToken();
   if (!key) {
     if (gasToken) {

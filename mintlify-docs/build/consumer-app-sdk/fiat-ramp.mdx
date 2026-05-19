@@ -166,7 +166,7 @@ const sdk = new StarkZap({
   chainId: ChainId.MAINNET,
   paycrest: { apiKey: process.env.PAYCREST_API_KEY },
   paymaster: {
-    nodeUrl: "SN_MAIN", // or "SN_SEPOLIA" for testnet
+    nodeUrl: "SN_MAIN",
     headers: { "x-paymaster-api-key": process.env.AVNU_PAYMASTER_API_KEY! },
   },
 });

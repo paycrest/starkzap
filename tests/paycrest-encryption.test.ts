@@ -37,4 +37,35 @@ describe("paycrest encryption (RSA PKCS1 v1.5)", () => {
       /PEM/i
     );
   });
+
+  it("uses the browser BigInt fallback when process.versions.node is absent", async () => {
+    // Simulate a true browser/RN/Workers environment by hiding
+    // process.versions.node. The encryptor should switch to the
+    // BigInt-based PKCS1 v1.5 path and still produce ciphertext
+    // the matching private key can decrypt. Guards against the
+    // bundler-specific error-message-matching the old fallback
+    // depended on (Webpack, Vite, Rollup each emit different strings).
+    const g = globalThis as { process?: unknown };
+    const original = g.process;
+    g.process = undefined;
+    try {
+      const { publicKey, privateKey } = nodeCrypto.generateKeyPairSync("rsa", {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: "spki", format: "pem" },
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+      });
+      const plaintext = "browser-path roundtrip";
+      const base64Ciphertext = await encryptRecipient(publicKey, plaintext);
+      const decrypted = nodeCrypto.privateDecrypt(
+        {
+          key: privateKey,
+          padding: nodeCrypto.constants.RSA_PKCS1_PADDING,
+        },
+        Buffer.from(base64Ciphertext, "base64")
+      );
+      expect(decrypted.toString("utf8")).toBe(plaintext);
+    } finally {
+      g.process = original;
+    }
+  });
 });
