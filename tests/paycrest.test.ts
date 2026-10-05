@@ -328,44 +328,55 @@ describe("Paycrest off-ramp", () => {
     expect(body.senderFeePercent).toBeUndefined();
   });
 
-  it("forwards a percent senderFeeOverride as body.senderFeePercent", async () => {
-    const receiveAddress =
-      "0x05bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse(
-        201,
-        envelope({
-          id: "ord-ovr-pct",
-          status: "initiated",
-          providerAccount: { receiveAddress, network: "starknet" },
-        })
-      )
-    );
-    const paycrest = new Paycrest({
-      apiKey: "k",
-      fetch: fetchMock as unknown as typeof fetch,
-    });
-    const { wallet } = makeFakeWallet();
-    await paycrest.offramp(wallet, {
-      from: { token: USDC, amount: Amount.parse("50", USDC) },
-      to: {
-        currency: "NGN",
-        recipient: {
-          institution: "GTBINGLA",
-          accountIdentifier: "1234567890",
-          accountName: "Test",
+  it.each([
+    ["{ percent }", { percent: 0.5 }],
+    // Legal for callers without exactOptionalPropertyTypes; `"amount" in`
+    // is true here, so the mapping must check the value, not the key.
+    [
+      "{ percent, amount: undefined }",
+      { percent: 0.5, amount: undefined } as unknown as { percent: number },
+    ],
+  ])(
+    "forwards a percent senderFeeOverride %s as body.senderFeePercent",
+    async (_label, senderFeeOverride) => {
+      const receiveAddress =
+        "0x05bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse(
+          201,
+          envelope({
+            id: "ord-ovr-pct",
+            status: "initiated",
+            providerAccount: { receiveAddress, network: "starknet" },
+          })
+        )
+      );
+      const paycrest = new Paycrest({
+        apiKey: "k",
+        fetch: fetchMock as unknown as typeof fetch,
+      });
+      const { wallet } = makeFakeWallet();
+      await paycrest.offramp(wallet, {
+        from: { token: USDC, amount: Amount.parse("50", USDC) },
+        to: {
+          currency: "NGN",
+          recipient: {
+            institution: "GTBINGLA",
+            accountIdentifier: "1234567890",
+            accountName: "Test",
+          },
         },
-      },
-      senderFeeOverride: { percent: 0.5 },
-    });
-    const [, init] = fetchMock.mock.calls[0]!;
-    const body = JSON.parse(init.body as string) as {
-      senderFee?: string;
-      senderFeePercent?: string;
-    };
-    expect(body.senderFeePercent).toBe("0.5");
-    expect(body.senderFee).toBeUndefined();
-  });
+        senderFeeOverride,
+      });
+      const [, init] = fetchMock.mock.calls[0]!;
+      const body = JSON.parse(init.body as string) as {
+        senderFee?: string;
+        senderFeePercent?: string;
+      };
+      expect(body.senderFeePercent).toBe("0.5");
+      expect(body.senderFee).toBeUndefined();
+    }
+  );
 });
 
 describe("Paycrest on-ramp", () => {

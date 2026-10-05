@@ -479,7 +479,11 @@ function senderFeeOverrideToBody(
   override: PaycrestSenderFeeOverride | undefined
 ): Record<string, string> {
   if (!override) return {};
-  if ("amount" in override) return { senderFee: override.amount.toUnit() };
+  // Check the value, not the key: callers without exactOptionalPropertyTypes
+  // can pass `{ percent, amount: undefined }`, where `"amount" in` is true.
+  if (override.amount !== undefined) {
+    return { senderFee: override.amount.toUnit() };
+  }
   return { senderFeePercent: String(override.percent) };
 }
 
