@@ -373,9 +373,9 @@ export interface WalletInterface extends BridgeOperatorInterface {
    * first call** — subsequent calls ignore them and return the cached
    * instance.
    *
-   * Off-ramp methods (`offramp`, `populateOfframp`) take this wallet as
-   * their first argument; on-ramp (`onramp`) is wallet-independent. See
-   * `Paycrest` for the full API.
+   * `Paycrest.offramp` takes this wallet as its first argument; on-ramp
+   * (`onramp`) is wallet-independent. See `Paycrest` for the full API, or
+   * use the `wallet.offramp` / `wallet.onramp` shortcuts.
    *
    * Paycrest is mainnet-only.
    */

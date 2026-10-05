@@ -819,10 +819,9 @@ describe("Wallet", () => {
     }
 
     it("offramp() delegates to paycrest().offramp(this, input, options)", async () => {
-      const offramp = vi.fn().mockResolvedValue({ path: "api" });
+      const offramp = vi.fn().mockResolvedValue({ orderId: "ord" });
       const wallet = await walletWithFakePaycrest({ offramp });
       const input = {
-        path: "api" as const,
         from: {
           token: testSwapToken,
           amount: Amount.parse("1", testSwapToken),
@@ -841,10 +840,9 @@ describe("Wallet", () => {
     });
 
     it("offramp() forwards explicit execute options", async () => {
-      const offramp = vi.fn().mockResolvedValue({ path: "api" });
+      const offramp = vi.fn().mockResolvedValue({ orderId: "ord" });
       const wallet = await walletWithFakePaycrest({ offramp });
       const input = {
-        path: "api" as const,
         from: {
           token: testSwapToken,
           amount: Amount.parse("1", testSwapToken),

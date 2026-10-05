@@ -5,17 +5,14 @@ import { fromAddress, Paycrest, mainnetTokens, type Token } from "starkzap";
  * On-ramp 1000 NGN -> stablecoin delivered to a Starknet wallet.
  * Token defaults to USDT; set `PAYCREST_TOKEN=USDC` to opt into USDC.
  *
- * On-ramp is Sender-API-only — Paycrest does not support on-ramp via
- * the Cairo Gateway. The response carries the bank account the user
- * must transfer fiat into; tokens are delivered after the transfer is
- * verified.
+ * The response carries the bank account the user must transfer fiat
+ * into; tokens are delivered after the transfer is verified.
  */
 async function main() {
   const apiKey = required("PAYCREST_API_KEY");
   const walletAddress = fromAddress(required("WALLET_ADDRESS"));
 
-  // No wallet connection needed for on-ramp — Paycrest's on-ramp is
-  // Sender-API-only and is wallet-independent.
+  // No wallet connection needed for on-ramp — it's wallet-independent.
   const paycrest = new Paycrest({ apiKey });
   const result = await paycrest.onramp({
     from: {

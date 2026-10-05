@@ -3,8 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "offramp:gateway": "node --import tsx offramp-gateway.ts",
-    "offramp:api": "node --import tsx offramp-api.ts",
+    "offramp": "node --import tsx offramp.ts",
     "onramp": "node --import tsx onramp.ts",
     "postinstall": "cd ../.. && npm run build"
   },

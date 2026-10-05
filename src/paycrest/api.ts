@@ -6,7 +6,6 @@ import type {
   PaycrestNetwork,
   PaycrestOrder,
   PaycrestOrderList,
-  PaycrestProviderOrderStatus,
   PaycrestRate,
   PaycrestToken,
 } from "@/paycrest/types";
@@ -58,8 +57,8 @@ interface PaycrestEnvelope<T> {
  * used by `src/signer/privy.ts` — URL validation up front, AbortController
  * timeout, JSON-error extraction with multiple fallback keys.
  *
- * Unauthenticated endpoints (currencies, institutions, tokens, rates,
- * pubkey) work without an API key; order-creating endpoints require one.
+ * Unauthenticated endpoints (currencies, institutions, tokens, rates)
+ * work without an API key; order endpoints require one.
  */
 export class PaycrestApi {
   private readonly baseUrl: string;
@@ -83,12 +82,6 @@ export class PaycrestApi {
       );
     }
     this.timeoutMs = rawTimeout;
-  }
-
-  /** RSA public key (PEM) used to encrypt recipient details on the gateway path. */
-  async getPublicKey(): Promise<string> {
-    const env = await this.request<string>("/v2/pubkey", { method: "GET" });
-    return env;
   }
 
   async getCurrencies(): Promise<PaycrestCurrency[]> {
@@ -171,48 +164,6 @@ export class PaycrestApi {
     }
     return this.request<PaycrestOrderList>(
       path,
-      { method: "GET" },
-      options?.signal
-    );
-  }
-
-  /**
-   * Look up an order by its on-chain gateway_id. Hits
-   * `GET /v2/orders/{chain_id}/{gateway_id}` (the
-   * `GetProviderOrderStatus` endpoint), which is the only public
-   * endpoint that indexes by gateway_id.
-   *
-   * Public endpoint — no API key required. Returns a smaller status
-   * shape than the full `PaycrestOrder`.
-   *
-   * `chainId` is the aggregator's fictional int64 for the network —
-   * for Starknet mainnet it's `STARKNET_MAINNET_CHAIN_ID` from
-   * `presets.ts`. Stored as `bigint` because the value exceeds
-   * `Number.MAX_SAFE_INTEGER`.
-   */
-  async getProviderOrderStatus(
-    chainId: bigint | number | string,
-    gatewayId: string,
-    options?: { signal?: AbortSignal }
-  ): Promise<PaycrestProviderOrderStatus> {
-    // The aggregator's int64 chainId for Starknet (23448594291968334)
-    // exceeds Number.MAX_SAFE_INTEGER, so a `number` callers may pass
-    // would silently round. Reject unsafe numeric inputs up front so
-    // mistakes surface as a clear argument error instead of a request
-    // for the wrong order id.
-    if (typeof chainId === "number" && !Number.isSafeInteger(chainId)) {
-      throw new Error(
-        "Paycrest.getProviderOrderStatus: chainId must be a safe integer, bigint, or decimal string (received unsafe number)."
-      );
-    }
-    if (typeof chainId === "string" && chainId.trim() === "") {
-      throw new Error("Paycrest.getProviderOrderStatus: chainId is required");
-    }
-    if (!gatewayId || gatewayId.trim() === "") {
-      throw new Error("Paycrest.getProviderOrderStatus: gatewayId is required");
-    }
-    return this.request<PaycrestProviderOrderStatus>(
-      `/v2/orders/${encodeURIComponent(String(chainId))}/${encodeURIComponent(gatewayId)}`,
       { method: "GET" },
       options?.signal
     );

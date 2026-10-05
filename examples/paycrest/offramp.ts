@@ -3,7 +3,6 @@ import {
   Amount,
   ChainId,
   fromAddress,
-  Paycrest,
   PaycrestOrderError,
   StarkSigner,
   StarkZap,
@@ -13,20 +12,18 @@ import {
 } from "starkzap";
 
 /**
- * Off-ramp 0.5 stablecoin (USDT by default, USDC opt-in via
- * `PAYCREST_TOKEN`) on Starknet -> NGN bank account, via the on-chain
- * Cairo Gateway path. Requires a real mainnet wallet with the chosen
- * token and an API key from app.paycrest.io.
- *
- * Paycrest is mainnet-only — there is no testnet variant.
+ * Off-ramp via the Paycrest Sender API: Paycrest creates the order,
+ * returns a `receiveAddress`, and the SDK transfers the tokens to it.
  *
  * Sponsorship:
- * - Set `AVNU_PAYMASTER_API_KEY` to sponsor the `approve + create_order`
- *   multicall via AVNU's paymaster (gasless for the user).
+ * - Set `AVNU_PAYMASTER_API_KEY` to sponsor the client-side `transfer`
+ *   call via AVNU's paymaster (gasless for the user).
  * - Within sponsored mode, set `PAYCREST_GAS_TOKEN=USDT|USDC|STRK|ETH`
  *   to pay gas in that token instead of being fully sponsored.
  * - Unset both for the SDK's default `user_pays` mode (user spends
  *   STRK from the wallet to cover gas).
+ *
+ * Token defaults to USDT; set `PAYCREST_TOKEN=USDC` to opt into USDC.
  */
 async function main() {
   const apiKey = required("PAYCREST_API_KEY");
@@ -45,16 +42,13 @@ async function main() {
     accountAddress: walletAddress,
     account: { signer: new StarkSigner(privateKey) },
   });
-
   await wallet.ensureReady({ deploy: "if_needed" });
 
   const token = resolveToken();
   const feeMode = resolveFeeMode();
-  const paycrest = new Paycrest({ apiKey });
-  const result = await paycrest.offramp(
-    wallet,
+  // wallet.offramp uses the Paycrest client built from `sdk` config above.
+  const result = await wallet.offramp(
     {
-      path: "gateway",
       from: {
         token,
         amount: Amount.parse("0.5", token),
@@ -65,34 +59,27 @@ async function main() {
           institution: required("RECIPIENT_INSTITUTION"),
           accountIdentifier: required("RECIPIENT_ACCOUNT_IDENTIFIER"),
           accountName: required("RECIPIENT_ACCOUNT_NAME"),
-          memo: "starkzap demo",
         },
       },
+      reference: `demo-${Date.now()}`,
     },
     feeMode ? { feeMode } : undefined
   );
 
-  console.log("submitted:", result.tx.hash);
-  console.log("rate:", result.rate);
+  console.log("orderId:", result.orderId);
+  console.log("receiveAddress:", result.receiveAddress);
+  console.log("validUntil:", result.providerAccount?.validUntil);
+  console.log("submitted transfer tx:", result.tx.hash);
 
-  // result.wait() handles the full lifecycle: waits for the L2
-  // receipt, parses the on-chain order id, then polls Paycrest until
-  // the order reaches a terminal status (gateway path hits
-  // /v2/orders/{chain_id}/{gateway_id}). Production servers should
-  // prefer webhooks via Paycrest.verifyWebhookSignature.
+  // result.wait() polls /v2/sender/orders/{uuid} until terminal.
   try {
-    const status = await result.wait();
-    console.log("orderId:", status.orderId);
-    console.log("final status:", status.status);
+    const order = await result.wait();
+    console.log("final status:", order.status);
   } catch (err) {
     if (err instanceof PaycrestOrderError) {
       // Log only status + order id — `err.order` includes the
       // recipient bank details and would leak PII.
-      console.error(
-        "order ended in non-success state:",
-        err.order.status,
-        err.order.id
-      );
+      console.error("order ended in:", err.order.status, err.order.id);
       process.exit(2);
     }
     throw err;

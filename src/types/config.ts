@@ -221,7 +221,7 @@ export interface BridgingConfig {
 /**
  * Configuration for the Paycrest fiat on/off-ramp module.
  *
- * Paycrest is mainnet-only — there is no testnet backend or Gateway.
+ * Paycrest is mainnet-only — there is no testnet backend.
  * `apiKey` is required for any order-creating call (offramp, onramp,
  * getOrder); read-only endpoints (currencies, institutions, rates)
  * work without one.
@@ -245,8 +245,6 @@ export interface PaycrestConfig {
   apiKey?: string;
   /** Override the API base URL. Defaults to `https://api.paycrest.io`. */
   apiBaseUrl?: string;
-  /** Override the Cairo Gateway address (e.g. for forking). */
-  gatewayAddress?: Address;
   /** Per-request timeout in milliseconds. Defaults to 15000. */
   requestTimeoutMs?: number;
 }
